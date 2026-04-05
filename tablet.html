@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>入退館受付</title>
+<style>
+  /* ======== リセット＆ベース ======== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #f4f4f0; font-family: -apple-system, 'Hiragino Sans', 'Yu Gothic', sans-serif; -webkit-tap-highlight-color: transparent; }
+
+  /* ======== レイアウト ======== */
+  #app { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1.5rem; }
+
+  .screen { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 480px; }
+  .screen.active { display: flex; }
+
+  /* ======== カード ======== */
+  .card { background: #fff; border-radius: 20px; padding: 2rem 1.75rem; width: 100%; box-shadow: 0 2px 16px rgba(0,0,0,0.07); }
+
+  /* ======== ロゴ・タイトル ======== */
+  .logo { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; color: #888; text-align: center; margin-bottom: 0.4rem; }
+  .page-title { font-size: 26px; font-weight: 700; color: #1a1a1a; text-align: center; margin-bottom: 0.3rem; }
+  .page-sub { font-size: 14px; color: #888; text-align: center; margin-bottom: 1.75rem; }
+
+  /* ======== モード切替タブ ======== */
+  .tabs { display: flex; gap: 8px; width: 100%; max-width: 480px; margin-bottom: 1rem; }
+  .tab { flex: 1; padding: 0.7rem; text-align: center; font-size: 15px; font-weight: 600; border-radius: 12px; cursor: pointer; border: 1.5px solid #ddd; background: #fff; color: #888; transition: all 0.15s; }
+  .tab-in.active  { background: #00a3af; color: #fff; border-color: #00a3af; }
+  .tab-out.active { background: #ce5242; color: #fff; border-color: #ce5242; }
+  .btn-primary.mode-in  { background: #00a3af; }
+  .btn-primary.mode-out { background: #ce5242; }
+
+  /* ======== テンキーディスプレイ ======== */
+  .display { background: #f8f8f6; border: 1.5px solid #e8e8e4; border-radius: 14px; padding: 1rem 1.25rem; text-align: center; margin-bottom: 1.25rem; min-height: 72px; display: flex; align-items: center; justify-content: center; }
+  .display-number { font-size: 36px; font-weight: 700; letter-spacing: 0.2em; color: #1a1a1a; }
+  .display-placeholder { font-size: 15px; color: #bbb; }
+
+  /* ======== テンキー ======== */
+  .numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 1.25rem; }
+  .num-btn { background: #f8f8f6; border: 1.5px solid #ebebeb; border-radius: 14px; padding: 1.1rem 0; font-size: 24px; font-weight: 600; color: #1a1a1a; cursor: pointer; text-align: center; transition: background 0.08s, transform 0.08s; user-select: none; -webkit-user-select: none; }
+  .num-btn:active { background: #e8e8e4; transform: scale(0.96); }
+  .num-btn.zero { }
+  .num-btn.del { font-size: 15px; font-weight: 500; color: #888; grid-column: span 2; }
+
+  /* ======== ボタン ======== */
+  .btn-primary { width: 100%; background: #1D9E75; border: none; border-radius: 14px; padding: 1rem; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+  .btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-primary:active:not(:disabled) { transform: scale(0.98); }
+  .btn-back { width: 100%; background: #f4f4f0; border: none; border-radius: 14px; padding: 0.85rem; font-size: 15px; font-weight: 600; color: #666; cursor: pointer; margin-top: 0.75rem; transition: background 0.1s; }
+  .btn-back:active { background: #e8e8e4; }
+
+  /* ======== エラーメッセージ ======== */
+  .error-msg { font-size: 16px; font-weight: 600; color: #c0392b; text-align: center; margin-top: 0.75rem; min-height: 24px; }
+
+  /* ======== 結果画面 ======== */
+  .success-icon { width: 72px; height: 72px; border-radius: 50%; background: #E1F5EE; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem; }
+  .success-icon svg { width: 36px; height: 36px; }
+  .result-name { font-size: 22px; font-weight: 700; color: #1a1a1a; text-align: center; margin-bottom: 0.25rem; }
+  .result-sub { font-size: 13px; color: #888; text-align: center; margin-bottom: 1.5rem; }
+
+  .info-table { width: 100%; border-collapse: collapse; }
+  .info-table td { padding: 0.6rem 0; border-bottom: 1px solid #f0f0ed; font-size: 15px; }
+  .info-table td:first-child { color: #888; width: 40%; }
+  .info-table td:last-child { font-weight: 600; color: #1a1a1a; text-align: right; }
+
+  .fee-block { background: #f4f4f0; border-radius: 14px; padding: 1.25rem; text-align: center; margin: 1.25rem 0; }
+  .fee-label { font-size: 13px; color: #888; margin-bottom: 0.25rem; }
+  .fee-amount { font-size: 36px; font-weight: 800; color: #1D9E75; }
+  .fee-note { font-size: 12px; color: #aaa; margin-top: 0.25rem; }
+
+  .badge { display: inline-block; padding: 0.3rem 0.9rem; border-radius: 8px; font-size: 12px; font-weight: 600; margin-bottom: 1.25rem; }
+  .badge-monthly { background: #E1F5EE; color: #0F6E56; }
+  .badge-dropin { background: #FAEEDA; color: #854F0B; }
+
+  /* ======== ローディング ======== */
+  .loading { position: fixed; inset: 0; background: rgba(255,255,255,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; display: none; }
+  .loading.show { display: flex; }
+  .spinner { width: 40px; height: 40px; border: 3px solid #e0e0e0; border-top-color: #1D9E75; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ======== 管理者リンク ======== */
+  .admin-link { font-size: 12px; color: #bbb; text-align: center; margin-top: 1.5rem; cursor: pointer; text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<!-- ローディング -->
+<div class="loading" id="loading"><div class="spinner"></div></div>
+
+<div id="app">
+
+  <!-- ===== 入力画面 ===== -->
+  <div id="screen-home" class="screen active">
+    <div class="logo">COWORKING SPACE</div>
+    <div class="tabs">
+      <div class="tab tab-in active" id="tab-in" onclick="setMode('in')">入館</div>
+      <div class="tab tab-out" id="tab-out" onclick="setMode('out')">退館</div>
+    </div>
+    <div class="card">
+      <div class="page-title" id="home-title">入館手続き</div>
+      <div class="page-sub">会員番号を入力してください</div>
+      <div class="display">
+        <span class="display-placeholder" id="display-placeholder">- - - - -</span>
+        <span class="display-number" id="display-number" style="display:none;"></span>
+      </div>
+      <div class="numpad">
+        <div class="num-btn" ontouchstart="" onclick="press('1')">1</div>
+        <div class="num-btn" ontouchstart="" onclick="press('2')">2</div>
+        <div class="num-btn" ontouchstart="" onclick="press('3')">3</div>
+        <div class="num-btn" ontouchstart="" onclick="press('4')">4</div>
+        <div class="num-btn" ontouchstart="" onclick="press('5')">5</div>
+        <div class="num-btn" ontouchstart="" onclick="press('6')">6</div>
+        <div class="num-btn" ontouchstart="" onclick="press('7')">7</div>
+        <div class="num-btn" ontouchstart="" onclick="press('8')">8</div>
+        <div class="num-btn" ontouchstart="" onclick="press('9')">9</div>
+        <div class="num-btn zero" ontouchstart="" onclick="press('0')">0</div>
+        <div class="num-btn del" ontouchstart="" onclick="del()">削除</div>
+      </div>
+      <button class="btn-primary mode-in" id="confirm-btn" onclick="confirm()" disabled>確認</button>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+    <div class="admin-link" onclick="goToEmailSearch()">会員番号を忘れた場合</div>
+  </div>
+
+  <!-- ===== メールアドレス検索画面 ===== -->
+  <div id="screen-email" class="screen">
+    <div class="logo">COWORKING SPACE</div>
+    <div class="card">
+      <div class="page-title">会員番号の確認</div>
+      <div class="page-sub">登録のメールアドレスを入力してください</div>
+      <input type="email" id="email-input"
+        placeholder="example@email.com"
+        style="width:100%;padding:1rem;font-size:16px;border:1.5px solid #e8e8e4;border-radius:14px;background:#f8f8f6;margin-bottom:1.25rem;outline:none;"
+        oninput="document.getElementById('email-confirm-btn').disabled = this.value.length === 0"
+      >
+      <button class="btn-primary mode-in" id="email-confirm-btn" onclick="searchByEmail()" disabled>検索</button>
+      <div class="error-msg" id="email-error-msg"></div>
+    </div>
+    <div class="admin-link" onclick="backHome()">← 戻る</div>
+  </div>
+
+  <!-- ===== メール検索結果画面 ===== -->
+  <div id="screen-email-result" class="screen">
+    <div class="card">
+      <div class="success-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1D9E75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <div class="page-title">会員番号が見つかりました</div>
+      <div style="height:1rem;"></div>
+      <table class="info-table">
+        <tr><td>お名前</td><td id="er-name"></td></tr>
+        <tr><td>会員番号</td><td id="er-id" style="font-size:24px;font-weight:800;color:#00a3af;"></td></tr>
+        <tr><td>会員区分</td><td id="er-type"></td></tr>
+      </table>
+      <button class="btn-primary" id="use-found-btn" style="margin-top:1.5rem;background:#00a3af;" onclick="useFoundId()">この番号で入館手続きへ</button>
+      <button class="btn-back" onclick="backHome()">トップに戻る</button>
+    </div>
+  </div>
+
+  <!-- ===== 入館確認画面 ===== -->
+  <div id="screen-confirm" class="screen">
+    <div class="card">
+      <div class="page-title" id="confirm-name" style="margin-bottom:0.5rem;"></div>
+      <div class="page-sub">上記のお名前でよろしいですか？</div>
+      <div style="height:0.75rem;"></div>
+      <table class="info-table">
+        <tr><td>会員番号</td><td id="confirm-id"></td></tr>
+        <tr><td>会員区分</td><td id="confirm-type"></td></tr>
+      </table>
+      <button class="btn-primary mode-in" id="confirm-yes-btn" style="margin-top:1.5rem;" onclick="doCheckin()">はい、入館します</button>
+      <button class="btn-back" onclick="backHome()">違います</button>
+    </div>
+  </div>
+
+  <!-- ===== 入館完了画面 ===== -->
+  <div id="screen-checkin" class="screen">
+    <div class="card">
+      <div class="success-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1D9E75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div class="result-name" id="ci-name"></div>
+      <div class="result-sub" id="ci-sub"></div>
+      <div class="badge" id="ci-badge"></div>
+      <div id="ci-notice" style="display:none;background:#FFF7E6;border-radius:12px;padding:0.9rem 1rem;font-size:14px;color:#854F0B;margin-bottom:1rem;line-height:1.6;"></div>
+      <table class="info-table">
+        <tr><td>会員番号</td><td id="ci-id"></td></tr>
+        <tr><td>会員区分</td><td id="ci-type"></td></tr>
+        <tr><td>入館時刻</td><td id="ci-time"></td></tr>
+      </table>
+      <button class="btn-primary" style="margin-top:1.5rem;" onclick="backHome()">完了</button>
+    </div>
+  </div>
+
+  <!-- ===== 退館完了画面 ===== -->
+  <div id="screen-checkout" class="screen">
+    <div class="card">
+      <div class="success-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1D9E75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div class="result-name" id="co-name"></div>
+      <div class="result-sub">ご利用ありがとうございました</div>
+      <div style="height:1rem;"></div>
+      <table class="info-table">
+        <tr><td>入館時刻</td><td id="co-in"></td></tr>
+        <tr><td>退館時刻</td><td id="co-out"></td></tr>
+        <tr><td>利用時間</td><td id="co-duration"></td></tr>
+      </table>
+      <div class="fee-block">
+        <div class="fee-label" id="co-fee-label">ご利用料金</div>
+        <div class="fee-amount" id="co-fee"></div>
+        <div class="fee-note" id="co-fee-note"></div>
+      </div>
+      <button class="btn-primary" onclick="backHome()">完了</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// ★ここを自分のGAS WebアプリURLに変更してください★
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbz7ZYwuZNObSqfOqH_N7Kr4xsR2SU-EzcAQWbGN4pqLO8evFA9VO4vrB1Onm5t6vqM8RQ/exec';;
+// ============================================================
+
+let input = '';
+let mode = 'in';
+let modeBeforeSearch = 'in'; // メール検索前のモードを記憶
+
+function setMode(m) {
+  mode = m;
+  input = '';
+  updateDisplay();
+  document.getElementById('error-msg').textContent = '';
+  document.getElementById('tab-in').classList.toggle('active', m === 'in');
+  document.getElementById('tab-out').classList.toggle('active', m === 'out');
+  document.getElementById('home-title').textContent = m === 'in' ? '入館手続き' : '退館手続き';
+  const btn = document.getElementById('confirm-btn');
+  btn.classList.toggle('mode-in',  m === 'in');
+  btn.classList.toggle('mode-out', m === 'out');
+  const yesBtn = document.getElementById('confirm-yes-btn');
+  yesBtn.classList.toggle('mode-in',  m === 'in');
+  yesBtn.classList.toggle('mode-out', m === 'out');
+}
+
+function press(d) {
+  if (input.length >= 5) return;
+  input += d;
+  updateDisplay();
+}
+
+function del() {
+  input = '';
+  updateDisplay();
+  document.getElementById('error-msg').textContent = '';
+}
+
+function updateDisplay() {
+  const ph = document.getElementById('display-placeholder');
+  const num = document.getElementById('display-number');
+  const btn = document.getElementById('confirm-btn');
+  if (input.length === 0) {
+    ph.style.display = '';
+    num.style.display = 'none';
+  } else {
+    ph.style.display = 'none';
+    num.style.display = '';
+    const padded = input.padStart(5, '0');
+    const leadingZeros = 5 - input.length;
+    num.innerHTML = padded.split('').map((d, i) =>
+      `<span style="color:${i < leadingZeros ? '#ccc' : '#1a1a1a'}">${d}</span>`
+    ).join('<span style="color:#ccc"> </span>');
+  }
+  btn.disabled = input.length === 0;
+}
+
+async function confirm() {
+  const id = input;
+  document.getElementById('error-msg').textContent = '';
+
+  if (mode === 'in') {
+    // 入館時は先に会員情報を取得して確認画面を表示
+    showLoading(true);
+    try {
+      const res = await fetchGAS({ action: 'getMember', memberId: id });
+      showLoading(false);
+      if (!res.success) {
+        document.getElementById('error-msg').textContent = res.error || '会員番号が見つかりません';
+        return;
+      }
+      document.getElementById('confirm-name').textContent = res.name + ' さんですか？';
+      document.getElementById('confirm-id').textContent = id.padStart(5, '0');
+      document.getElementById('confirm-type').textContent = res.typeLabel;
+      showScreen('screen-confirm');
+    } catch (e) {
+      showLoading(false);
+      document.getElementById('error-msg').textContent = '通信エラーが発生しました。Wi-Fiを確認してください。';
+    }
+    return;
+  }
+
+  // 退館はそのまま処理
+  showLoading(true);
+  try {
+    const res = await fetchGAS({ action: 'checkout', memberId: id });
+    showLoading(false);
+    if (!res.success) {
+      document.getElementById('error-msg').textContent = res.error || 'エラーが発生しました';
+      return;
+    }
+    showCheckoutResult(res);
+  } catch (e) {
+    showLoading(false);
+    document.getElementById('error-msg').textContent = '通信エラーが発生しました。Wi-Fiを確認してください。';
+  }
+}
+
+async function doCheckin() {
+  const id = input;
+  showLoading(true);
+  try {
+    const res = await fetchGAS({ action: 'checkin', memberId: id });
+    showLoading(false);
+    if (!res.success) {
+      showScreen('screen-home');
+      document.getElementById('error-msg').textContent = res.error || 'エラーが発生しました';
+      return;
+    }
+    showCheckinResult(res);
+  } catch (e) {
+    showLoading(false);
+    showScreen('screen-home');
+    document.getElementById('error-msg').textContent = '通信エラーが発生しました。Wi-Fiを確認してください。';
+  }
+}
+
+function showCheckinResult(data) {
+  document.getElementById('ci-name').textContent = data.name + ' 様';
+  document.getElementById('ci-sub').textContent = data.dropinFallback ? '' : 'ようこそ！';
+  document.getElementById('ci-id').textContent = data.memberId;
+  document.getElementById('ci-type').textContent = data.typeLabel;
+  document.getElementById('ci-time').textContent = data.checkinTime;
+  const badge = document.getElementById('ci-badge');
+  badge.textContent = data.isMonthly ? '月額会員' : 'ドロップイン';
+  badge.className = 'badge ' + (data.isMonthly ? 'badge-monthly' : 'badge-dropin');
+
+  // 平日プランが土日に来た場合のお知らせ
+  const notice = document.getElementById('ci-notice');
+  if (data.dropinFallback && data.fallbackMessage) {
+    notice.textContent = data.fallbackMessage;
+    notice.style.display = 'block';
+  } else {
+    notice.style.display = 'none';
+  }
+
+  showScreen('screen-checkin');
+}
+
+function showCheckoutResult(data) {
+  document.getElementById('co-name').textContent = data.name + ' 様';
+  document.getElementById('co-in').textContent = data.checkinTime;
+  document.getElementById('co-out').textContent = data.checkoutTime;
+  document.getElementById('co-duration').textContent = data.duration;
+
+  if (data.isMonthly) {
+    document.getElementById('co-fee-label').textContent = '月額会員';
+    document.getElementById('co-fee').textContent = '¥0';
+    document.getElementById('co-fee-note').textContent = '月額プランのためお支払い不要です';
+  } else {
+    document.getElementById('co-fee-label').textContent = 'ご利用料金（ドロップイン）';
+    document.getElementById('co-fee').textContent = '¥' + Number(data.fee).toLocaleString();
+    document.getElementById('co-fee-note').textContent = '400円/時間・上限1,000円/日';
+  }
+  showScreen('screen-checkout');
+}
+
+function backHome() {
+  input = '';
+  updateDisplay();
+  document.getElementById('error-msg').textContent = '';
+  showScreen('screen-home');
+}
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function showLoading(show) {
+  document.getElementById('loading').classList.toggle('show', show);
+}
+
+async function searchByEmail() {
+  const email = document.getElementById('email-input').value.trim();
+  document.getElementById('email-error-msg').textContent = '';
+  showLoading(true);
+  try {
+    const res = await fetchGAS({ action: 'searchByEmail', email });
+    showLoading(false);
+    if (!res.success) {
+      document.getElementById('email-error-msg').textContent = res.error || '見つかりませんでした';
+      return;
+    }
+    document.getElementById('er-name').textContent = res.name + ' 様';
+    document.getElementById('er-id').textContent = res.memberId;
+    document.getElementById('er-type').textContent = res.typeLabel;
+    document.getElementById('use-found-btn').textContent =
+      modeBeforeSearch === 'in' ? 'この番号で入館手続きへ' : 'この番号で退館手続きへ';
+    document.getElementById('use-found-btn').style.background =
+      modeBeforeSearch === 'in' ? '#00a3af' : '#ce5242';
+    showScreen('screen-email-result');
+  } catch(e) {
+    showLoading(false);
+    document.getElementById('email-error-msg').textContent = '通信エラーが発生しました。Wi-Fiを確認してください。';
+  }
+}
+
+function goToEmailSearch() {
+  modeBeforeSearch = mode; // 現在のモードを記憶
+  document.getElementById('email-input').value = '';
+  document.getElementById('email-error-msg').textContent = '';
+  document.getElementById('email-confirm-btn').disabled = true;
+  showScreen('screen-email');
+}
+
+function useFoundId() {
+  const foundId = document.getElementById('er-id').textContent;
+  setMode(modeBeforeSearch); // 遷移元のモードに戻す
+  input = foundId;
+  updateDisplay();
+  showScreen('screen-home');
+}
+
+
+async function fetchGAS(params) {
+  const url = new URL(GAS_URL);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString(), { redirect: 'follow' });
+  return res.json();
+}
+</script>
+</body>
+</html>
+
+<script>

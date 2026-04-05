@@ -1,0 +1,541 @@
+// ============================================================
+// コワーキングスペース 入退館管理システム - Google Apps Script
+// ============================================================
+// 【設定】以下の値をご自身の環境に合わせて変更してください
+
+const CONFIG = {
+  SHEET_NAME_LOG: '入退館ログ',
+  SHEET_NAME_MEMBERS: '会員マスタ',
+  SHEET_NAME_STATS: '統計',
+  ADMIN_EMAIL: 'ikewaki.keita@handanotane.com',  // 管理者メールアドレス
+  SPACE_NAME: 'コココリン コワーキングスペース',     // スペース名
+  DROPIN_HOURLY: 400,                    // ドロップイン時間料金（円/時間）
+  DROPIN_DAILY_MAX: 1000,               // ドロップイン上限（円/日）
+};
+
+// 会員種別と月額料金
+const MEMBER_TYPES = {
+  'monthly_general':  { label: '月額会員（一般）',     monthly: 8000, isMonthly: true },
+  'monthly_student':  { label: '月額会員（学生）',     monthly: 4000, isMonthly: true },
+  'monthly_weekend':  { label: '月額プラン（土日祝）', monthly: 4000, isMonthly: true },
+  'monthly_weekday':  { label: '月額プラン（平日）',   monthly: 6000, isMonthly: true },
+  'dropin':           { label: 'ドロップイン',         monthly: null, isMonthly: false },
+};
+
+// ============================================================
+// メインエントリーポイント（GETリクエスト処理）
+// ============================================================
+function doGet(e) {
+  return handleRequest(e);
+}
+
+// POSTリクエスト処理
+function doPost(e) {
+  return handleRequest(e);
+}
+
+function handleRequest(e) {
+  const params = e.parameter || {};
+  const action = params.action;
+
+  let result;
+  try {
+    switch (action) {
+      case 'checkin':
+        result = doCheckIn(params.memberId);
+        break;
+      case 'checkout':
+        result = doCheckOut(params.memberId);
+        break;
+      case 'getMember':
+        result = getMemberInfo(params.memberId);
+        break;
+      case 'getLog':
+        result = getLog(params.date);
+        break;
+      case 'getStats':
+        result = getStats();
+        break;
+      case 'getActiveUsers':
+        result = getActiveUsers();
+        break;
+      default:
+        result = { success: false, error: '不明なアクションです' };
+    }
+  } catch (err) {
+    result = { success: false, error: err.message };
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// 入館処理
+// ============================================================
+function doCheckIn(memberId) {
+  if (!memberId) return { success: false, error: '会員番号が入力されていません' };
+
+  const member = findMember(memberId);
+  if (!member) return { success: false, error: '会員番号が見つかりません: ' + memberId };
+
+  // 月額プランの曜日チェック
+  const dayCheck = checkDayRestriction(member.type);
+  if (!dayCheck.ok) return { success: false, error: dayCheck.message };
+
+  // 既に入館中かチェック
+  const existing = findActiveSession(memberId);
+  if (existing) return { success: false, error: 'すでに入館中です' };
+
+  const now = new Date();
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+
+  // ヘッダー行がなければ作成
+  ensureLogHeader(sheet);
+
+  sheet.appendRow([
+    Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd'),
+    Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss'),
+    '',           // 退館時刻（空欄）
+    memberId,
+    member.name,
+    member.type,
+    MEMBER_TYPES[member.type]?.label || member.type,
+    '',           // 利用時間（空欄）
+    '',           // 料金（空欄）
+    '利用中',
+  ]);
+
+  return {
+    success: true,
+    action: 'checkin',
+    memberId: memberId,
+    name: member.name,
+    type: member.type,
+    typeLabel: MEMBER_TYPES[member.type]?.label || member.type,
+    checkinTime: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'),
+    isMonthly: MEMBER_TYPES[member.type]?.isMonthly || false,
+  };
+}
+
+// ============================================================
+// 退館処理
+// ============================================================
+function doCheckOut(memberId) {
+  if (!memberId) return { success: false, error: '会員番号が入力されていません' };
+
+  const member = findMember(memberId);
+  if (!member) return { success: false, error: '会員番号が見つかりません: ' + memberId };
+
+  const session = findActiveSession(memberId);
+  if (!session) return { success: false, error: '入館記録が見つかりません' };
+
+  const now = new Date();
+  const checkinDate = session.date + ' ' + session.checkinTime;
+  const checkinDt = new Date(checkinDate.replace(/\//g, '-').replace(' ', 'T') + '+09:00');
+  const diffMs = now - checkinDt;
+  const diffMin = Math.max(1, Math.floor(diffMs / 60000));
+  const diffHours = Math.floor(diffMin / 60);
+  const diffRemain = diffMin % 60;
+  const durationStr = diffHours > 0 ? `${diffHours}時間${diffRemain}分` : `${diffMin}分`;
+
+  // 料金計算
+  let fee = 0;
+  let feeLabel = '';
+  if (!MEMBER_TYPES[member.type]?.isMonthly) {
+    const hours = Math.ceil(diffMin / 60);
+    fee = Math.min(hours * CONFIG.DROPIN_HOURLY, CONFIG.DROPIN_DAILY_MAX);
+    feeLabel = `¥${fee.toLocaleString()}`;
+  } else {
+    feeLabel = '月額会員（追加料金なし）';
+  }
+
+  // ログ行を更新
+  updateSessionRow(session.rowIndex, now, durationStr, fee);
+
+  // サンキューメール送信（メアドがあれば）
+  if (member.email) {
+    sendThankYouEmail(member, session.checkinTime, Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'), durationStr, fee);
+  }
+
+  return {
+    success: true,
+    action: 'checkout',
+    memberId: memberId,
+    name: member.name,
+    type: member.type,
+    typeLabel: MEMBER_TYPES[member.type]?.label || member.type,
+    checkinTime: session.checkinTime.substring(0, 5),
+    checkoutTime: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'),
+    duration: durationStr,
+    fee: fee,
+    feeLabel: feeLabel,
+    isMonthly: MEMBER_TYPES[member.type]?.isMonthly || false,
+  };
+}
+
+// ============================================================
+// ヘルパー：会員マスタ検索
+// ============================================================
+function findMember(memberId) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][0]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum) {
+      return {
+        id:    String(data[i][0]),
+        name:  data[i][1],
+        type:  data[i][2],
+        email: data[i][3] || '',
+        note:  data[i][4] || '',
+      };
+    }
+  }
+  return null;
+}
+
+// ============================================================
+// ヘルパー：アクティブセッション検索（入館中レコード）
+// ============================================================
+function findActiveSession(memberId) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  const data = sheet.getDataRange().getValues();
+  // 最新行から逆順で検索
+  const inputNum = parseInt(memberId, 10);
+  for (let i = data.length - 1; i >= 1; i--) {
+    const rowNum = parseInt(String(data[i][3]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum && data[i][9] === '利用中') {
+      const rawDate = data[i][0];
+      const rawTime = data[i][1];
+      const checkinDate = (rawDate instanceof Date)
+        ? Utilities.formatDate(rawDate, 'Asia/Tokyo', 'yyyy/MM/dd')
+        : String(rawDate);
+      const checkinTime = (rawTime instanceof Date)
+        ? Utilities.formatDate(rawTime, 'Asia/Tokyo', 'HH:mm:ss')
+        : String(rawTime);
+      return {
+        rowIndex:    i + 1,
+        date:        checkinDate,
+        checkinTime: checkinTime,
+      };
+    }
+  }
+  return null;
+}
+
+// ============================================================
+// ヘルパー：ログ行の退館情報を更新
+// ============================================================
+function updateSessionRow(rowIndex, checkoutTime, duration, fee) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  sheet.getRange(rowIndex, 3).setValue(Utilities.formatDate(checkoutTime, 'Asia/Tokyo', 'HH:mm:ss'));
+  sheet.getRange(rowIndex, 8).setValue(duration);
+  sheet.getRange(rowIndex, 9).setValue(fee > 0 ? fee : '');
+  sheet.getRange(rowIndex, 10).setValue('退館済');
+}
+
+// ============================================================
+// ヘルパー：曜日制限チェック
+// ============================================================
+function checkDayRestriction(type) {
+  const now = new Date();
+  const day = now.getDay(); // 0=日, 1=月..., 6=土
+  const isWeekend = (day === 0 || day === 6);
+
+  if (type === 'monthly_weekend' && !isWeekend) {
+    return { ok: false, message: '土日祝プランは平日はご利用いただけません' };
+  }
+  if (type === 'monthly_weekday' && isWeekend) {
+    return { ok: false, message: '平日プランは土日祝はご利用いただけません' };
+  }
+  return { ok: true };
+}
+
+// ============================================================
+// ヘルパー：会員情報取得
+// ============================================================
+function getMemberInfo(memberId) {
+  const member = findMember(memberId);
+  if (!member) return { success: false, error: '会員番号が見つかりません' };
+  return {
+    success: true,
+    ...member,
+    typeLabel: MEMBER_TYPES[member.type]?.label || member.type,
+    isMonthly: MEMBER_TYPES[member.type]?.isMonthly || false,
+  };
+}
+
+// ============================================================
+// ヘルパー：ログ取得（管理者画面用）
+// ============================================================
+function getLog(dateStr) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  const data = sheet.getDataRange().getValues();
+  const target = dateStr || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
+  const rows = [];
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = String(data[i][0]).trim();
+    if (!dateStr || rowDate === target) {
+      rows.push({
+        date:         data[i][0],
+        checkinTime:  String(data[i][1]).substring(0, 5),
+        checkoutTime: data[i][2] ? String(data[i][2]).substring(0, 5) : '',
+        memberId:     data[i][3],
+        name:         data[i][4],
+        typeLabel:    data[i][6],
+        duration:     data[i][7] || '',
+        fee:          data[i][8] || '',
+        status:       data[i][9],
+      });
+    }
+  }
+  return { success: true, logs: rows.reverse() };
+}
+
+// ============================================================
+// ヘルパー：現在の利用中ユーザー取得
+// ============================================================
+function getActiveUsers() {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  const data = sheet.getDataRange().getValues();
+  const active = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][9] === '利用中') {
+      active.push({
+        memberId:    data[i][3],
+        name:        data[i][4],
+        typeLabel:   data[i][6],
+        checkinTime: String(data[i][1]).substring(0, 5),
+      });
+    }
+  }
+  return { success: true, users: active };
+}
+
+// ============================================================
+// ヘルパー：統計データ取得
+// ============================================================
+function getStats() {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  const data = sheet.getDataRange().getValues();
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
+  const thisMonth = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM');
+
+  let todayCount = 0, todayRevenue = 0;
+  let monthCount = 0, monthRevenue = 0;
+  const dailyMap = {};
+
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = String(data[i][0]).trim();
+    if (!rowDate) continue;
+    const fee = Number(data[i][8]) || 0;
+
+    if (rowDate === today) { todayCount++; todayRevenue += fee; }
+    if (rowDate.startsWith(thisMonth)) { monthCount++; monthRevenue += fee; }
+
+    dailyMap[rowDate] = (dailyMap[rowDate] || { count: 0, revenue: 0 });
+    dailyMap[rowDate].count++;
+    dailyMap[rowDate].revenue += fee;
+  }
+
+  const daily = Object.entries(dailyMap)
+    .sort((a, b) => a[0] < b[0] ? 1 : -1)
+    .slice(0, 30)
+    .map(([date, v]) => ({ date, ...v }));
+
+  return {
+    success: true,
+    today: { count: todayCount, revenue: todayRevenue },
+    month: { count: monthCount, revenue: monthRevenue },
+    daily,
+  };
+}
+
+// ============================================================
+// ヘルパー：サンキューメール送信
+// ============================================================
+function sendThankYouEmail(member, checkinTime, checkoutTime, duration, fee) {
+  const subject = `【${CONFIG.SPACE_NAME}】ご利用ありがとうございました`;
+  const feeText = fee > 0 ? `ご利用料金：¥${fee.toLocaleString()}` : '月額会員のため追加料金はありません';
+  const body = `${member.name} 様
+
+本日も${CONFIG.SPACE_NAME}をご利用いただきありがとうございました。
+
+■ ご利用内容
+　入館時刻：${checkinTime.substring(0, 5)}
+　退館時刻：${checkoutTime}
+　利用時間：${duration}
+　${feeText}
+
+またのご利用をお待ちしております。
+
+${CONFIG.SPACE_NAME}`;
+
+  try {
+    GmailApp.sendEmail(member.email, subject, body, {
+      name: CONFIG.SPACE_NAME,
+      replyTo: CONFIG.ADMIN_EMAIL,
+    });
+  } catch (e) {
+    console.log('メール送信エラー:', e.message);
+  }
+}
+
+// ============================================================
+// ヘルパー：シート取得または作成
+// ============================================================
+
+// ★「コワーキング入退館管理」スプレッドシートのID（書き込み先を明示固定）
+const DEST_SS_ID = '1knYE9NMyYkVAWQqqNb5DsUoUHLAF4RFVQ3k6MOzTgCU';
+
+function getDestSpreadsheet() {
+  return SpreadsheetApp.openById(DEST_SS_ID);
+}
+
+function getOrCreateSheet(name) {
+  const ss = getDestSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    if (name === CONFIG.SHEET_NAME_LOG) ensureLogHeader(sheet);
+    if (name === CONFIG.SHEET_NAME_MEMBERS) ensureMemberHeader(sheet);
+  }
+  return sheet;
+}
+
+function ensureLogHeader(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['日付', '入館時刻', '退館時刻', '会員番号', '氏名', '会員種別コード', '会員種別', '利用時間', '料金', '状態']);
+    sheet.getRange(1, 1, 1, 10).setFontWeight('bold').setBackground('#E1F5EE');
+  }
+}
+
+function ensureMemberHeader(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['会員番号', '氏名', '会員種別', 'メールアドレス', '備考']);
+    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#E1F5EE');
+    // サンプルデータ
+    sheet.appendRow(['10001', '田中 太郎', 'monthly_general', 'tanaka@example.com', '']);
+    sheet.appendRow(['10002', '鈴木 花子', 'monthly_student', 'suzuki@example.com', '']);
+    sheet.appendRow(['20001', 'ゲスト',   'dropin',          '', '都度利用']);
+  }
+}
+
+// ============================================================
+// リマインドメール送信（時間トリガー設定用）
+// 毎月末に翌月の月額会員へリマインドを送信
+// ============================================================
+function sendMonthlyReminder() {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    const type = data[i][2];
+    const email = data[i][3];
+    const name = data[i][1];
+    if (!email || !MEMBER_TYPES[type]?.isMonthly) continue;
+
+    const subject = `【${CONFIG.SPACE_NAME}】来月もよろしくお願いします`;
+    const body = `${name} 様
+
+いつも${CONFIG.SPACE_NAME}をご利用いただきありがとうございます。
+来月もご利用をお待ちしております。
+
+${CONFIG.SPACE_NAME}`;
+    try {
+      GmailApp.sendEmail(email, subject, body, { name: CONFIG.SPACE_NAME });
+    } catch (e) {
+      console.log('リマインドメールエラー:', name, e.message);
+    }
+  }
+}
+
+// ============================================================
+// 会員登録フォーム回答から会員マスタを同期
+// GASエディタから手動実行 または トリガーで定期実行
+// ============================================================
+// ============================================================
+// 会員登録フォーム回答から会員マスタを同期
+// GASエディタから手動実行 または フォーム送信トリガーで自動実行
+// ============================================================
+function syncMembersFromForm(e) {
+  const PLAN_MAP = {
+    'ドロップイン（一時利用）': 'dropin',
+    '月額会員（一般）':         'monthly_general',
+    '月額会員（学生）':         'monthly_student',
+    '月額プラン（土日祝）':     'monthly_weekend',
+    '月額プラン（平日）':       'monthly_weekday',
+  };
+
+  const COL_EMAIL     = 14;
+  const COL_NAME      = 2;
+  const COL_PLAN      = 8;
+  const COL_MEMBER_ID = 11;
+
+  const SOURCE_SS_ID = '1BIIPZKcEppdvrUoD2TGcGIOXFZVKMqYpsB-fmYJDOzs';
+
+  let row;
+  if (e && e.values) {
+    // トリガー経由：送信された行のデータが e.values に入っている（一瞬で処理）
+    row = e.values;
+  } else {
+    // 手動実行：ソースシートの最終行を取得
+    const srcSS = SpreadsheetApp.openById(SOURCE_SS_ID);
+    const srcSheet = srcSS.getSheets()[0];
+    const lastRow = srcSheet.getLastRow();
+    if (lastRow < 2) return { success: false, error: 'データがありません' };
+    row = srcSheet.getRange(lastRow, 1, 1, 16).getValues()[0];
+  }
+
+  const memberId = String(row[COL_MEMBER_ID]).trim();
+  const name     = String(row[COL_NAME]).trim();
+  const email    = String(row[COL_EMAIL]).trim();
+  const planRaw  = String(row[COL_PLAN]).trim();
+  const planCode = PLAN_MAP[planRaw] || 'dropin';
+
+  if (!memberId || memberId === '' || memberId === 'undefined') {
+    console.log('会員番号なし、スキップ');
+    return { success: false, error: '会員番号が空です' };
+  }
+
+  const destSheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+
+  // 既存チェック
+  const existingData = destSheet.getDataRange().getValues();
+  for (let i = 1; i < existingData.length; i++) {
+    if (String(existingData[i][0]).trim() === memberId) {
+      console.log('既存会員のためスキップ: ' + memberId);
+      return { success: false, error: '既存会員: ' + memberId };
+    }
+  }
+
+  destSheet.appendRow([memberId, name, planCode, email, planRaw]);
+  console.log('追加完了: ' + memberId + ' ' + name);
+  return { success: true, memberId: memberId, name: name };
+}
+
+// ============================================================
+// フォーム送信トリガーをプログラムで登録する関数
+// ★一度だけGASエディタから手動実行してください
+// ============================================================
+function setupFormTrigger() {
+  const SOURCE_SS_ID = '1BIIPZKcEppdvrUoD2TGcGIOXFZVKMqYpsB-fmYJDOzs';
+
+  // 既存の同名トリガーを削除（重複防止）
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'syncMembersFromForm') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  // 会員登録スプレッドシートのフォーム送信トリガーを登録
+  const srcSS = SpreadsheetApp.openById(SOURCE_SS_ID);
+  ScriptApp.newTrigger('syncMembersFromForm')
+    .forSpreadsheet(srcSS)
+    .onFormSubmit()
+    .create();
+
+  console.log('トリガーを登録しました。フォーム送信時に自動同期されます。');
+}

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理者ダッシュボード</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #f4f4f0; font-family: -apple-system, 'Hiragino Sans', 'Yu Gothic', sans-serif; }
+  body { padding: 1.5rem; }
+
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #1a1a1a; flex: 1; }
+  .header a { font-size: 13px; color: #1D9E75; text-decoration: none; font-weight: 600; }
+
+  /* 統計カード */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+  .stat-card { background: #fff; border-radius: 16px; padding: 1.1rem 1.25rem; }
+  .stat-label { font-size: 12px; color: #888; margin-bottom: 6px; }
+  .stat-value { font-size: 28px; font-weight: 800; color: #1a1a1a; }
+  .stat-value.green { color: #1D9E75; }
+
+  /* セクション */
+  .section { background: #fff; border-radius: 16px; padding: 1.25rem; margin-bottom: 1rem; }
+  .section-title { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; }
+  .refresh-btn { font-size: 12px; color: #1D9E75; cursor: pointer; font-weight: 600; border: none; background: none; }
+
+  /* ログ */
+  .log-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0ed; font-size: 14px; }
+  .log-item:last-child { border-bottom: none; }
+  .log-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; flex-shrink: 0; }
+  .badge-in { background: #E1F5EE; color: #0F6E56; }
+  .badge-out { background: #FAEEDA; color: #854F0B; }
+  .log-name { flex: 1; font-weight: 600; color: #1a1a1a; }
+  .log-meta { font-size: 12px; color: #888; }
+  .log-fee { font-size: 13px; font-weight: 700; color: #1D9E75; }
+
+  /* 利用中ユーザー */
+  .user-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f0f0ed; }
+  .user-item:last-child { border-bottom: none; }
+  .user-avatar { width: 36px; height: 36px; border-radius: 50%; background: #E1F5EE; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #0F6E56; flex-shrink: 0; }
+  .user-name { flex: 1; font-size: 14px; font-weight: 600; color: #1a1a1a; }
+  .user-meta { font-size: 12px; color: #888; }
+  .user-time { font-size: 12px; color: #1D9E75; font-weight: 600; }
+
+  /* テーブル */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 6px 8px; color: #888; font-weight: 500; border-bottom: 1px solid #f0f0ed; }
+  td { padding: 8px 8px; border-bottom: 1px solid #f8f8f6; color: #1a1a1a; vertical-align: middle; }
+
+  /* 日付フィルタ */
+  .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; }
+  .filter-row input[type=date] { padding: 0.4rem 0.6rem; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 13px; }
+  .filter-row button { padding: 0.4rem 0.9rem; background: #1D9E75; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+  .empty { font-size: 13px; color: #bbb; text-align: center; padding: 1.5rem 0; }
+  .last-updated { font-size: 11px; color: #bbb; text-align: right; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>管理者ダッシュボード</h1>
+  <a href="tablet.html">← 受付画面</a>
+</div>
+
+<!-- 統計 -->
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-label">現在の利用者</div>
+    <div class="stat-value" id="stat-active">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">本日の入館数</div>
+    <div class="stat-value" id="stat-today">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">本日の売上</div>
+    <div class="stat-value green" id="stat-today-rev">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">今月の売上</div>
+    <div class="stat-value green" id="stat-month-rev">-</div>
+  </div>
+</div>
+
+<!-- 利用中ユーザー -->
+<div class="section">
+  <div class="section-title">
+    現在利用中
+    <button class="refresh-btn" onclick="loadAll()">更新</button>
+  </div>
+  <div id="active-list"></div>
+</div>
+
+<!-- 入退館ログ -->
+<div class="section">
+  <div class="section-title">入退館ログ</div>
+  <div class="filter-row">
+    <input type="date" id="log-date">
+    <button onclick="loadLog()">絞り込み</button>
+    <button onclick="document.getElementById('log-date').value=''; loadLog();" style="background:#888;">全件</button>
+  </div>
+  <div id="log-list"></div>
+  <div class="last-updated" id="last-updated"></div>
+</div>
+
+<!-- 日別集計 -->
+<div class="section">
+  <div class="section-title">日別集計（直近30日）</div>
+  <table>
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th style="text-align:right;">入館数</th>
+        <th style="text-align:right;">売上（ドロップイン）</th>
+      </tr>
+    </thead>
+    <tbody id="daily-table"></tbody>
+  </table>
+</div>
+
+<script>
+// ★ tablet.html と同じURLを設定してください
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbz7ZYwuZNObSqfOqH_N7Kr4xsR2SU-EzcAQWbGN4pqLO8evFA9VO4vrB1Onm5t6vqM8RQ/exec';
+
+async function fetchGAS(params) {
+  const url = new URL(GAS_URL);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString(), { redirect: 'follow' });
+  return res.json();
+}
+
+async function loadAll() {
+  await Promise.all([loadStats(), loadActiveUsers(), loadLog()]);
+}
+
+async function loadStats() {
+  try {
+    const data = await fetchGAS({ action: 'getStats' });
+    if (!data.success) return;
+    document.getElementById('stat-today').textContent = data.today.count;
+    document.getElementById('stat-today-rev').textContent = '¥' + data.today.revenue.toLocaleString();
+    document.getElementById('stat-month-rev').textContent = '¥' + data.month.revenue.toLocaleString();
+
+    const tbody = document.getElementById('daily-table');
+    if (data.daily.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">データがありません</td></tr>';
+    } else {
+      tbody.innerHTML = data.daily.map(d => `
+        <tr>
+          <td>${d.date}</td>
+          <td style="text-align:right;">${d.count}件</td>
+          <td style="text-align:right;color:#1D9E75;font-weight:600;">${d.revenue > 0 ? '¥' + d.revenue.toLocaleString() : '-'}</td>
+        </tr>
+      `).join('');
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function loadActiveUsers() {
+  try {
+    const data = await fetchGAS({ action: 'getActiveUsers' });
+    const el = document.getElementById('active-list');
+    document.getElementById('stat-active').textContent = data.users?.length ?? '-';
+
+    if (!data.users || data.users.length === 0) {
+      el.innerHTML = '<div class="empty">現在利用中のユーザーはいません</div>';
+      return;
+    }
+    el.innerHTML = data.users.map(u => `
+      <div class="user-item">
+        <div class="user-avatar">${u.name[0]}</div>
+        <div style="flex:1;">
+          <div class="user-name">${u.name}</div>
+          <div class="user-meta">${u.typeLabel} · #${u.memberId}</div>
+        </div>
+        <div class="user-time">${u.checkinTime} 〜</div>
+      </div>
+    `).join('');
+  } catch(e) { console.error(e); }
+}
+
+async function loadLog() {
+  try {
+    const dateVal = document.getElementById('log-date').value.replace(/-/g, '/');
+    const params = { action: 'getLog' };
+    if (dateVal) params.date = dateVal;
+    const data = await fetchGAS(params);
+    const el = document.getElementById('log-list');
+
+    if (!data.logs || data.logs.length === 0) {
+      el.innerHTML = '<div class="empty">記録がありません</div>';
+    } else {
+      el.innerHTML = data.logs.map(l => `
+        <div class="log-item">
+          <span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span>
+          <span class="log-name">${l.name}</span>
+          <span class="log-meta">${l.typeLabel}</span>
+          <span class="log-meta">${l.checkinTime}${l.checkoutTime ? ' 〜 ' + l.checkoutTime : ''}</span>
+          ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : ''}
+        </div>
+      `).join('');
+    }
+    document.getElementById('last-updated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
+  } catch(e) { console.error(e); }
+}
+
+// 今日の日付をデフォルトセット
+document.getElementById('log-date').value = new Date().toISOString().split('T')[0];
+loadAll();
+setInterval(loadAll, 60000); // 1分ごとに自動更新
+</script>
+</body>
+</html>
