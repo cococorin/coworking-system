@@ -7,10 +7,11 @@ const CONFIG = {
   SHEET_NAME_LOG: '入退館ログ',
   SHEET_NAME_MEMBERS: '会員マスタ',
   SHEET_NAME_STATS: '統計',
-  ADMIN_EMAIL: 'admin@yourcompany.com',  // 管理者メールアドレス
-  SPACE_NAME: 'コワーキングスペース',     // スペース名
-  DROPIN_HOURLY: 400,                    // ドロップイン時間料金（円/時間）
-  DROPIN_DAILY_MAX: 1000,               // ドロップイン上限（円/日）
+  ADMIN_EMAIL: 'info@handanotane.com',
+  FROM_EMAIL:   'info@handanotane.com',
+  SPACE_NAME: 'cococorin',
+  DROPIN_HOURLY: 400,
+  DROPIN_DAILY_MAX: 1000,
 };
 
 // 会員種別と月額料金
@@ -26,6 +27,30 @@ const MEMBER_TYPES = {
 // メインエントリーポイント（GETリクエスト処理）
 // ============================================================
 function doGet(e) {
+  const params = e.parameter || {};
+  // 受信停止ページ
+  if (params.action === 'unsubscribe') {
+    const result = unsubscribe(params.memberId);
+    const html = result.success
+      ? `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メール受信停止</title>
+<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f8f6;}
+.card{background:#fff;border-radius:16px;padding:2.5rem 2rem;max-width:420px;width:90%;text-align:center;box-shadow:0 2px 16px rgba(0,0,0,0.08);}
+h2{color:#2e2826;font-size:18px;margin-bottom:1rem;}
+p{color:#555;font-size:14px;line-height:1.8;margin:0 0 1rem;}
+a{color:#00a3af;}</style></head>
+<body><div class="card">
+<h2>メールの受信を停止しました</h2>
+<p>今後、このメールアドレス宛のメールはお届けしません。</p>
+<p>再度メールを受け取りたい場合は、<a href="mailto:info@handanotane.com">info@handanotane.com</a> までご連絡ください。</p>
+<p style="color:#aaa;font-size:12px;">cococorin</p>
+</div></body></html>`
+      : `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>エラー</title>
+<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f8f6;}
+.card{background:#fff;border-radius:16px;padding:2.5rem 2rem;max-width:420px;width:90%;text-align:center;}
+h2{color:#ce5242;}p{color:#555;font-size:14px;}</style></head>
+<body><div class="card"><h2>エラーが発生しました</h2><p>${result.error || '会員情報が見つかりませんでした'}</p></div></body></html>`;
+    return HtmlService.createHtmlOutput(html).setTitle('メール受信停止');
+  }
   return handleRequest(e);
 }
 
@@ -182,7 +207,8 @@ function doCheckOut(memberId) {
   // 初回利用チェック＆メール送信
   if (member.email && isFirstVisit(memberId)) {
     const mailOpt = getMemberMailOption(memberId);
-    if (mailOpt !== '0') {
+    const globalMailEnabled = getMailEnabled();
+    if (mailOpt !== '0' && globalMailEnabled) {
       sendFirstVisitEmail(member, session.checkinTime, Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'), durationStr, fee);
     }
   }
@@ -491,6 +517,14 @@ function unsubscribe(memberId) {
 }
 
 // ============================================================
+// メール配信のグローバルON/OFFを取得
+// ============================================================
+function getMailEnabled() {
+  const settings = getMailSettings().settings || {};
+  return settings['mail_enabled'] !== '0';
+}
+
+// ============================================================
 // メール設定をスプレッドシートから取得
 // ============================================================
 function getMailSettings() {
@@ -516,6 +550,7 @@ function saveMailSettings(params) {
   const updates = {
     first_visit_subject: params.first_visit_subject || '',
     first_visit_body:    params.first_visit_body    || '',
+    mail_enabled:        params.mail_enabled !== undefined ? params.mail_enabled : '1',
   };
   for (const [key, val] of Object.entries(updates)) {
     let found = false;
@@ -571,6 +606,7 @@ ${CONFIG.SPACE_NAME}
   try {
     GmailApp.sendEmail(member.email, subject, body, {
       name: CONFIG.SPACE_NAME,
+      from: CONFIG.FROM_EMAIL,
       replyTo: CONFIG.ADMIN_EMAIL,
     });
     console.log('初回利用メール送信完了:', member.name);
@@ -602,6 +638,7 @@ ${CONFIG.SPACE_NAME}`;
   try {
     GmailApp.sendEmail(member.email, subject, body, {
       name: CONFIG.SPACE_NAME,
+      from: CONFIG.FROM_EMAIL,
       replyTo: CONFIG.ADMIN_EMAIL,
     });
   } catch (e) {
