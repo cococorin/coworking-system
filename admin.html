@@ -26,12 +26,15 @@
   .refresh-btn { font-size: 12px; color: #1D9E75; cursor: pointer; font-weight: 600; border: none; background: none; }
 
   /* ログ */
-  .log-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0ed; font-size: 14px; }
-  .log-item:last-child { border-bottom: none; }
+  .log-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .log-table th { font-size: 11px; color: #aaa; font-weight: 600; padding: 6px 8px; border-bottom: 2px solid #f0f0ed; text-align: left; white-space: nowrap; }
+  .log-table td { padding: 8px 8px; border-bottom: 1px solid #f0f0ed; vertical-align: middle; }
+  .log-table tr:last-child td { border-bottom: none; }
+  .log-table tr:hover td { background: #f8f8f6; }
   .log-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; flex-shrink: 0; }
   .badge-in { background: #E1F5EE; color: #0F6E56; }
   .badge-out { background: #FAEEDA; color: #854F0B; }
-  .log-name { flex: 1; font-weight: 600; color: #1a1a1a; }
+  .log-name { font-weight: 600; color: #1a1a1a; }
   .log-meta { font-size: 12px; color: #888; }
   .log-fee { font-size: 13px; font-weight: 700; color: #1D9E75; }
 
@@ -221,15 +224,36 @@ async function loadLog() {
       summary.style.display = 'block';
       summary.textContent = `${logs.length}件 ／ ドロップイン売上合計：¥${total.toLocaleString()}（${dropinCount}件）`;
 
-      el.innerHTML = logs.map(l => `
-        <div class="log-item">
-          <span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span>
-          <span class="log-name">${l.name}</span>
-          <span class="log-meta">${l.typeLabel}</span>
-          <span class="log-meta">${l.date} ${l.checkinTime}${l.checkoutTime ? ' 〜 ' + l.checkoutTime : ''}</span>
-          ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : ''}
-        </div>
-      `).join('');
+      el.innerHTML = `
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>状態</th>
+              <th>お名前</th>
+              <th>会員区分</th>
+              <th>日付</th>
+              <th>入館</th>
+              <th>退館</th>
+              <th>利用時間</th>
+              <th style="text-align:right;">料金</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logs.map(l => `
+              <tr>
+                <td><span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span></td>
+                <td class="log-name">${l.name}</td>
+                <td class="log-meta">${l.typeLabel}</td>
+                <td class="log-meta">${l.date}</td>
+                <td class="log-meta">${l.checkinTime}</td>
+                <td class="log-meta">${l.checkoutTime || '-'}</td>
+                <td class="log-meta">${l.duration || '-'}</td>
+                <td style="text-align:right;">${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
     }
     document.getElementById('last-updated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   } catch(e) { console.error(e); }
