@@ -112,6 +112,25 @@
   <div class="last-updated" id="last-updated"></div>
 </div>
 
+
+<!-- メール設定 -->
+<div class="section">
+  <div class="section-title">メール設定（初回利用メール）</div>
+  <div style="margin-bottom:1rem;">
+    <label style="font-size:13px;color:#555;display:block;margin-bottom:4px;">件名</label>
+    <input type="text" id="mail-subject" style="width:100%;padding:0.5rem 0.75rem;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;box-sizing:border-box;">
+  </div>
+  <div style="margin-bottom:1rem;">
+    <label style="font-size:13px;color:#555;display:block;margin-bottom:4px;">本文</label>
+    <div style="font-size:11px;color:#aaa;margin-bottom:4px;">使用できる変数：{name}（氏名）{checkin}（入館時刻）{checkout}（退館時刻）{duration}（利用時間）{fee}（料金）{unsubscribe_url}（受信停止リンク）</div>
+    <textarea id="mail-body" rows="10" style="width:100%;padding:0.5rem 0.75rem;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;box-sizing:border-box;resize:vertical;font-family:monospace;"></textarea>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <button onclick="saveMailSettings()" style="background:#00a3af;color:#fff;border:none;padding:0.5rem 1.5rem;border-radius:8px;font-size:14px;cursor:pointer;">保存</button>
+    <span id="mail-save-msg" style="font-size:13px;color:#1D9E75;display:none;">保存しました</span>
+  </div>
+</div>
+
 <!-- 日別集計 -->
 <div class="section">
   <div class="section-title">日別集計（直近30日）</div>
@@ -270,7 +289,35 @@ const today = new Date().toISOString().split('T')[0];
 document.getElementById('log-date-from').value = today;
 document.getElementById('log-date-to').value = today;
 loadAll();
+loadMailSettings();
 setInterval(loadAll, 60000);
+
+async function loadMailSettings() {
+  try {
+    const data = await fetchGAS({ action: 'getMailSettings' });
+    if (data.success && data.settings) {
+      document.getElementById('mail-subject').value = data.settings['first_visit_subject'] || '';
+      document.getElementById('mail-body').value    = data.settings['first_visit_body']    || '';
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function saveMailSettings() {
+  try {
+    const subject = document.getElementById('mail-subject').value;
+    const body    = document.getElementById('mail-body').value;
+    const data = await fetchGAS({
+      action: 'saveMailSettings',
+      first_visit_subject: subject,
+      first_visit_body:    body,
+    });
+    const msg = document.getElementById('mail-save-msg');
+    if (data.success) {
+      msg.style.display = 'inline';
+      setTimeout(() => msg.style.display = 'none', 3000);
+    }
+  } catch(e) { console.error(e); }
+}
 </script>
 </body>
 </html>

@@ -59,6 +59,18 @@ function handleRequest(e) {
       case 'searchByEmail':
         result = searchByEmail(params.email);
         break;
+      case 'getActiveUsers':
+        result = getActiveUsers();
+        break;
+      case 'getMailSettings':
+        result = getMailSettings();
+        break;
+      case 'saveMailSettings':
+        result = saveMailSettings(params);
+        break;
+      case 'unsubscribe':
+        result = unsubscribe(params.memberId);
+        break;
       default:
         result = { success: false, error: '不明なアクションです' };
     }
@@ -164,11 +176,16 @@ function doCheckOut(memberId) {
   // ログ行を更新
   updateSessionRow(session.rowIndex, now, durationStr, fee);
 
-  // サンキューメール送信（メアドがあれば）
-  // ★本番運用開始時にコメントアウトを外してください
-  // if (member.email) {
-  //   sendThankYouEmail(member, session.checkinTime, Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'), durationStr, fee);
-  // }
+  // 最終利用日を会員マスタに記録
+  updateLastVisit(memberId, now);
+
+  // 初回利用チェック＆メール送信
+  if (member.email && isFirstVisit(memberId)) {
+    const mailOpt = getMemberMailOption(memberId);
+    if (mailOpt !== '0') {
+      sendFirstVisitEmail(member, session.checkinTime, Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'), durationStr, fee);
+    }
+  }
 
   return {
     success: true,
@@ -396,6 +413,170 @@ function getStats() {
     month: { count: monthCount, revenue: monthRevenue },
     daily,
   };
+}
+
+
+// ============================================================
+// 初回利用判定（2026/04/18以降のログに記録があるか）
+// ============================================================
+function isFirstVisit(memberId) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  const startDate = '2026/04/18';
+  let count = 0;
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][3]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum) {
+      const rowDate = (data[i][0] instanceof Date)
+        ? Utilities.formatDate(data[i][0], 'Asia/Tokyo', 'yyyy/MM/dd')
+        : String(data[i][0]).trim();
+      if (rowDate >= startDate) count++;
+    }
+  }
+  // 今回の退館分を含めて1件のみなら初回
+  return count <= 1;
+}
+
+// ============================================================
+// 最終利用日を会員マスタに記録（G列）
+// ============================================================
+function updateLastVisit(memberId, date) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][0]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum) {
+      const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy/MM/dd');
+      sheet.getRange(i + 1, 7).setValue(dateStr); // G列
+      return;
+    }
+  }
+}
+
+// ============================================================
+// 会員のメール受信設定を取得（F列）
+// ============================================================
+function getMemberMailOption(memberId) {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][0]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum) {
+      const val = String(data[i][5]).trim(); // F列
+      return val === '' ? '1' : val; // 未設定は受け取る扱い
+    }
+  }
+  return '1';
+}
+
+// ============================================================
+// メール受信拒否（unsubscribe）
+// ============================================================
+function unsubscribe(memberId) {
+  if (!memberId) return { success: false, error: '会員番号が必要です' };
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][0]).trim(), 10);
+    if (!isNaN(rowNum) && rowNum === inputNum) {
+      sheet.getRange(i + 1, 6).setValue('0'); // F列を0に
+      return { success: true, message: 'メール受信を停止しました' };
+    }
+  }
+  return { success: false, error: '会員番号が見つかりません' };
+}
+
+// ============================================================
+// メール設定をスプレッドシートから取得
+// ============================================================
+function getMailSettings() {
+  const ss = getDestSpreadsheet();
+  let sheet = ss.getSheetByName('メール設定');
+  if (!sheet) return { success: false, error: 'メール設定シートが見つかりません' };
+  const data = sheet.getDataRange().getValues();
+  const settings = {};
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0]) settings[String(data[i][0]).trim()] = String(data[i][1] || '');
+  }
+  return { success: true, settings };
+}
+
+// ============================================================
+// メール設定をスプレッドシートに保存
+// ============================================================
+function saveMailSettings(params) {
+  const ss = getDestSpreadsheet();
+  let sheet = ss.getSheetByName('メール設定');
+  if (!sheet) sheet = ss.insertSheet('メール設定');
+  const data = sheet.getDataRange().getValues();
+  const updates = {
+    first_visit_subject: params.first_visit_subject || '',
+    first_visit_body:    params.first_visit_body    || '',
+  };
+  for (const [key, val] of Object.entries(updates)) {
+    let found = false;
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][0]).trim() === key) {
+        sheet.getRange(i + 1, 2).setValue(val);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sheet.appendRow([key, val]);
+    }
+  }
+  return { success: true, message: '保存しました' };
+}
+
+// ============================================================
+// 初回利用メール送信
+// ============================================================
+function sendFirstVisitEmail(member, checkinTime, checkoutTime, duration, fee) {
+  const settings = getMailSettings().settings || {};
+  const subject = settings['first_visit_subject'] || `【${CONFIG.SPACE_NAME}】はじめてのご利用ありがとうございました`;
+  const feeText = fee > 0 ? `ご利用料金：¥${fee.toLocaleString()}` : '月額会員のため追加料金はありません';
+  const unsubscribeUrl = `${ScriptApp.getService().getUrl()}?action=unsubscribe&memberId=${member.id}`;
+
+  let body = settings['first_visit_body'] ||
+`{name} 様
+
+はじめて${CONFIG.SPACE_NAME}をご利用いただきありがとうございました。
+
+■ ご利用内容
+　入館時刻：{checkin}
+　退館時刻：{checkout}
+　利用時間：{duration}
+　{fee}
+
+またのご来館をお待ちしております。
+
+${CONFIG.SPACE_NAME}
+
+---
+メールの受信停止はこちら：{unsubscribe_url}`;
+
+  body = body
+    .replace(/{name}/g, member.name)
+    .replace(/{checkin}/g, checkinTime.substring(0, 5))
+    .replace(/{checkout}/g, checkoutTime)
+    .replace(/{duration}/g, duration)
+    .replace(/{fee}/g, feeText)
+    .replace(/{unsubscribe_url}/g, unsubscribeUrl);
+
+  try {
+    GmailApp.sendEmail(member.email, subject, body, {
+      name: CONFIG.SPACE_NAME,
+      replyTo: CONFIG.ADMIN_EMAIL,
+    });
+    console.log('初回利用メール送信完了:', member.name);
+  } catch (e) {
+    console.log('メール送信エラー:', e.message);
+  }
 }
 
 // ============================================================
