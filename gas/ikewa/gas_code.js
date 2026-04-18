@@ -595,6 +595,9 @@ ${CONFIG.SPACE_NAME}
 ---
 メールの受信停止はこちら：{unsubscribe_url}`;
 
+  // \n を実際の改行に変換（スプレッドシートから読み込んだ場合の対処）
+  body = body.replace(/\\n/g, '\n').replace(/\n/g, '\n');
+
   body = body
     .replace(/{name}/g, member.name)
     .replace(/{checkin}/g, checkinTime.substring(0, 5))
@@ -603,11 +606,39 @@ ${CONFIG.SPACE_NAME}
     .replace(/{fee}/g, feeText)
     .replace(/{unsubscribe_url}/g, unsubscribeUrl);
 
+  // HTMLメール用に変換
+  const htmlBody = `
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#333;">
+  <div style="background:#2e2826;padding:20px 24px;border-radius:8px 8px 0 0;">
+    <p style="color:#fff;font-size:18px;font-weight:bold;margin:0;">cococorin</p>
+    <p style="color:#aaa;font-size:12px;margin:4px 0 0;">半田市創造・連携・実践センター</p>
+  </div>
+  <div style="background:#fff;padding:24px;border:1px solid #e0e0e0;">
+    <p style="font-size:15px;">${member.name} 様</p>
+    <p style="font-size:14px;line-height:1.8;">はじめてcococorinをご利用いただきありがとうございました。<br>またのご来館をお待ちしております。</p>
+    <div style="background:#f8f8f6;border-radius:8px;padding:16px 20px;margin:20px 0;">
+      <p style="font-size:12px;color:#888;margin:0 0 10px;font-weight:bold;">ご利用内容</p>
+      <table style="font-size:13px;width:100%;border-collapse:collapse;">
+        <tr><td style="color:#888;padding:4px 0;width:90px;">入館時刻</td><td>${checkinTime.substring(0, 5)}</td></tr>
+        <tr><td style="color:#888;padding:4px 0;">退館時刻</td><td>${checkoutTime}</td></tr>
+        <tr><td style="color:#888;padding:4px 0;">利用時間</td><td>${duration}</td></tr>
+        <tr><td style="color:#888;padding:4px 0;">料金</td><td style="font-weight:bold;">${feeText}</td></tr>
+      </table>
+    </div>
+    <p style="font-size:14px;line-height:1.8;">ご不明な点はお気軽にお問い合わせください。</p>
+    <p style="font-size:14px;"><a href="mailto:info@handanotane.com" style="color:#00a3af;">info@handanotane.com</a></p>
+  </div>
+  <div style="background:#f4f4f0;padding:12px 24px;border-radius:0 0 8px 8px;border:1px solid #e0e0e0;border-top:none;">
+    <p style="font-size:11px;color:#aaa;margin:0;">メールの受信を停止する場合は<a href="${unsubscribeUrl}" style="color:#00a3af;">こちら</a>からお手続きください。</p>
+  </div>
+</div>`;
+
   try {
     GmailApp.sendEmail(member.email, subject, body, {
       name: CONFIG.SPACE_NAME,
       from: CONFIG.FROM_EMAIL,
       replyTo: CONFIG.ADMIN_EMAIL,
+      htmlBody: htmlBody,
     });
     console.log('初回利用メール送信完了:', member.name);
   } catch (e) {
