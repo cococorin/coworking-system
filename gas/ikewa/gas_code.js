@@ -572,75 +572,86 @@ function saveMailSettings(params) {
 // 初回利用メール送信
 // ============================================================
 function sendFirstVisitEmail(member, checkinTime, checkoutTime, duration, fee) {
-  const settings = getMailSettings().settings || {};
-  const subject = settings['first_visit_subject'] || `【${CONFIG.SPACE_NAME}】はじめてのご利用ありがとうございました`;
-  const feeText = fee > 0 ? `ご利用料金：¥${fee.toLocaleString()}` : '月額会員のため追加料金はありません';
+  const subject = `【cococorin】はじめてのご利用ありがとうございました`;
   const unsubscribeUrl = `${ScriptApp.getService().getUrl()}?action=unsubscribe&memberId=${member.id}`;
+  const isMonthly = MEMBER_TYPES[member.type]?.isMonthly || false;
+  const feeText = isMonthly ? '月額会員のため無料' : `¥${fee.toLocaleString()}`;
 
-  let body = settings['first_visit_body'] ||
-`{name} 様
+  // 共通パーツ
+  const header = `
+    <div style="background:#2e2826;padding:18px 24px;border-radius:8px 8px 0 0;">
+      <p style="color:#fff;font-size:17px;font-weight:bold;margin:0;">cococorin</p>
+      <p style="color:#aaa;font-size:11px;margin:3px 0 0;">半田市創造・連携・実践センター</p>
+    </div>`;
 
-はじめて${CONFIG.SPACE_NAME}をご利用いただきありがとうございました。
+  const greeting = `
+    <p style="font-size:14px;margin:0 0 14px;">${member.name} 様</p>
+    <p style="font-size:13px;line-height:1.85;margin:0 0 14px;">はじめてcococorinをご利用いただきありがとうございました。</p>
+    <p style="font-size:13px;line-height:1.85;margin:0 0 14px;">cococorinは、静かに集中するだけじゃない場所です。隣接するカフェの心地よいざわめきのなかで、自分のペースで仕事や勉強に向き合える、そんな「ちょうどいい」空間を目指しています。そして、ここに集まる人同士がゆるやかにつながり、あたたかいコミュニティに育っていけたらと思っています。またぜひ、顔を出しにきてください。</p>`;
 
-■ ご利用内容
-　入館時刻：{checkin}
-　退館時刻：{checkout}
-　利用時間：{duration}
-　{fee}
-
-またのご来館をお待ちしております。
-
-${CONFIG.SPACE_NAME}
-
----
-メールの受信停止はこちら：{unsubscribe_url}`;
-
-  // \n を実際の改行に変換（スプレッドシートから読み込んだ場合の対処）
-  body = body.replace(/\\n/g, '\n').replace(/\n/g, '\n');
-
-  body = body
-    .replace(/{name}/g, member.name)
-    .replace(/{checkin}/g, checkinTime.substring(0, 5))
-    .replace(/{checkout}/g, checkoutTime)
-    .replace(/{duration}/g, duration)
-    .replace(/{fee}/g, feeText)
-    .replace(/{unsubscribe_url}/g, unsubscribeUrl);
-
-  // HTMLメール用に変換
-  const htmlBody = `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#333;">
-  <div style="background:#2e2826;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <p style="color:#fff;font-size:18px;font-weight:bold;margin:0;">cococorin</p>
-    <p style="color:#aaa;font-size:12px;margin:4px 0 0;">半田市創造・連携・実践センター</p>
-  </div>
-  <div style="background:#fff;padding:24px;border:1px solid #e0e0e0;">
-    <p style="font-size:15px;">${member.name} 様</p>
-    <p style="font-size:14px;line-height:1.8;">はじめてcococorinをご利用いただきありがとうございました。<br>またのご来館をお待ちしております。</p>
-    <div style="background:#f8f8f6;border-radius:8px;padding:16px 20px;margin:20px 0;">
-      <p style="font-size:12px;color:#888;margin:0 0 10px;font-weight:bold;">ご利用内容</p>
-      <table style="font-size:13px;width:100%;border-collapse:collapse;">
-        <tr><td style="color:#888;padding:4px 0;width:90px;">入館時刻</td><td>${checkinTime.substring(0, 5)}</td></tr>
-        <tr><td style="color:#888;padding:4px 0;">退館時刻</td><td>${checkoutTime}</td></tr>
-        <tr><td style="color:#888;padding:4px 0;">利用時間</td><td>${duration}</td></tr>
-        <tr><td style="color:#888;padding:4px 0;">料金</td><td style="font-weight:bold;">${feeText}</td></tr>
+  const usageInfo = `
+    <div style="background:#f8f8f6;border-radius:8px;padding:14px 18px;margin:18px 0;">
+      <p style="font-size:11px;color:#888;font-weight:bold;margin:0 0 10px;">本日のご利用内容</p>
+      <table style="font-size:12px;width:100%;border-collapse:collapse;">
+        <tr><td style="color:#888;padding:3px 0;width:80px;">入館時刻</td><td>${checkinTime.substring(0,5)}</td></tr>
+        <tr><td style="color:#888;padding:3px 0;">退館時刻</td><td>${checkoutTime}</td></tr>
+        <tr><td style="color:#888;padding:3px 0;">利用時間</td><td>${duration}</td></tr>
+        <tr><td style="color:#888;padding:3px 0;">ご利用料金</td><td style="font-weight:bold;">${feeText}</td></tr>
       </table>
+    </div>`;
+
+  const survey = `
+    <div style="border-left:3px solid #00a3af;padding:10px 14px;margin:18px 0;background:#f0fafb;border-radius:0 8px 8px 0;">
+      <p style="font-size:12px;color:#085041;line-height:1.75;margin:0;">ご利用の感想をぜひ聞かせてください。アンケートにお答えいただいた方には、次回ご来館時に<strong>コワーキング1時間無料券 または cococorinオリジナルステッカー</strong>をプレゼントしています。<br><br>
+      <a href="https://forms.gle/tvYFJqgT1HFQ2LEaA" style="color:#00a3af;font-weight:bold;">アンケートに答える（1〜2分）</a><br><br>
+      ご回答後、次回ご来館時にスタッフへお声がけください。</p>
+    </div>`;
+
+  const planInfo = `
+    <div style="border:1px solid #c8ead9;border-radius:8px;padding:14px 18px;margin:18px 0;background:#f0faf7;">
+      <p style="font-size:11px;color:#0F6E56;font-weight:bold;margin:0 0 8px;">よく来るなら、月額プランがおトクかも</p>
+      <table style="font-size:12px;width:100%;border-collapse:collapse;">
+        <tr><td style="color:#0F6E56;padding:3px 0;width:140px;">月額プラン（平日）</td><td>月6,000円〜 平日使い放題</td></tr>
+        <tr><td style="color:#0F6E56;padding:3px 0;">月額プラン（土日祝）</td><td>月4,000円〜 土日祝使い放題</td></tr>
+        <tr><td style="color:#0F6E56;padding:3px 0;">月額会員（一般）</td><td>月8,000円〜 毎日使い放題</td></tr>
+        <tr><td style="color:#0F6E56;padding:3px 0;">月額会員（学生）</td><td>月4,000円〜 毎日使い放題</td></tr>
+      </table>
+      <p style="font-size:11px;color:#0F6E56;margin:10px 0 0;">ご興味あれば <a href="mailto:info@handanotane.com" style="color:#0F6E56;">info@handanotane.com</a> までお気軽にご相談ください。</p>
+    </div>`;
+
+  const footer_contact = `<p style="font-size:12px;color:#888;margin:14px 0 0;">ご不明な点は <a href="mailto:info@handanotane.com" style="color:#00a3af;">info@handanotane.com</a> までお気軽にどうぞ。</p>`;
+
+  const footer_unsub = `
+    <div style="background:#f4f4f0;padding:12px 24px;border-radius:0 0 8px 8px;border:1px solid #e0e0e0;border-top:none;">
+      <p style="font-size:11px;color:#aaa;margin:0;">メールの受信を停止する場合は<a href="${unsubscribeUrl}" style="color:#00a3af;">こちら</a>からお手続きください。</p>
+    </div>`;
+
+  // ドロップイン向け（月額プラン案内あり）
+  // 月額会員向け（月額プラン案内なし）
+  const bodyContent = isMonthly
+    ? `${greeting}${usageInfo}${survey}${footer_contact}`
+    : `${greeting}${usageInfo}${planInfo}${survey}${footer_contact}`;
+
+  const htmlBody = `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#333;">
+    ${header}
+    <div style="background:#fff;padding:24px;border:1px solid #e0e0e0;">
+      ${bodyContent}
     </div>
-    <p style="font-size:14px;line-height:1.8;">ご不明な点はお気軽にお問い合わせください。</p>
-    <p style="font-size:14px;"><a href="mailto:info@handanotane.com" style="color:#00a3af;">info@handanotane.com</a></p>
-  </div>
-  <div style="background:#f4f4f0;padding:12px 24px;border-radius:0 0 8px 8px;border:1px solid #e0e0e0;border-top:none;">
-    <p style="font-size:11px;color:#aaa;margin:0;">メールの受信を停止する場合は<a href="${unsubscribeUrl}" style="color:#00a3af;">こちら</a>からお手続きください。</p>
-  </div>
-</div>`;
+    ${footer_unsub}
+  </div>`;
+
+  const plainBody = isMonthly
+    ? `${member.name} 様\n\nはじめてcococorinをご利用いただきありがとうございました。\n\n入館時刻：${checkinTime.substring(0,5)}\n退館時刻：${checkoutTime}\n利用時間：${duration}\n\nアンケートにご協力ください：https://forms.gle/tvYFJqgT1HFQ2LEaA\n（回答後、次回来館時にスタッフへお声がけください）\n\ncococorin\ninfo@handanotane.com`
+    : `${member.name} 様\n\nはじめてcococorinをご利用いただきありがとうございました。\n\n入館時刻：${checkinTime.substring(0,5)}\n退館時刻：${checkoutTime}\n利用時間：${duration}\nご利用料金：${feeText}\n\nよく来るなら月額プランもご検討ください。詳細は info@handanotane.com まで。\n\nアンケートにご協力ください：https://forms.gle/tvYFJqgT1HFQ2LEaA\n（回答後、次回来館時にスタッフへお声がけください）\n\ncococorin\ninfo@handanotane.com`;
 
   try {
-    GmailApp.sendEmail(member.email, subject, body, {
-      name: CONFIG.SPACE_NAME,
+    GmailApp.sendEmail(member.email, subject, plainBody, {
+      name: 'cococorin',
       from: CONFIG.FROM_EMAIL,
       replyTo: CONFIG.ADMIN_EMAIL,
       htmlBody: htmlBody,
     });
-    console.log('初回利用メール送信完了:', member.name);
+    console.log('初回利用メール送信完了:', member.name, isMonthly ? '月額会員向け' : 'ドロップイン向け');
   } catch (e) {
     console.log('メール送信エラー:', e.message);
   }
