@@ -59,9 +59,6 @@ function handleRequest(e) {
       case 'searchByEmail':
         result = searchByEmail(params.email);
         break;
-      case 'getActiveUsers':
-        result = getActiveUsers();
-        break;
       default:
         result = { success: false, error: '不明なアクションです' };
     }
@@ -93,7 +90,10 @@ function doCheckIn(memberId) {
 
   // 平日プランが土日に来た場合はdropin扱いで入館
   const effectiveType = dayCheck.dropinFallback ? 'dropin' : member.type;
-  const effectiveLabel = dayCheck.dropinFallback ? 'ドロップイン（平日プラン・土日利用）' : (MEMBER_TYPES[member.type]?.label || member.type);
+  const fallbackLabel = member.type === 'monthly_weekend'
+    ? 'ドロップイン（休日プラン・平日利用）'
+    : 'ドロップイン（平日プラン・土日利用）';
+  const effectiveLabel = dayCheck.dropinFallback ? fallbackLabel : (MEMBER_TYPES[member.type]?.label || member.type);
 
   const now = new Date();
   const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
@@ -258,7 +258,8 @@ function checkDayRestriction(type) {
   const isWeekend = (day === 0 || day === 6);
 
   if (type === 'monthly_weekend' && !isWeekend) {
-    return { ok: false, message: '土日祝プランは平日はご利用いただけません' };
+    // エラーにせずドロップイン扱いで入館させる
+    return { ok: true, dropinFallback: true, message: '休日プランのため、本日はドロップインでのご利用となります（400円/時間・上限1,000円/日）' };
   }
   if (type === 'monthly_weekday' && isWeekend) {
     // エラーにせずドロップイン扱いで入館させる
@@ -306,50 +307,34 @@ function getMemberInfo(memberId) {
 // ============================================================
 // ヘルパー：ログ取得（管理者画面用）
 // ============================================================
-function formatLogTime(val) {
-  if (!val) return '';
-  try {
-    return Utilities.formatDate(new Date(val), 'Asia/Tokyo', 'HH:mm');
-  } catch(e) {}
-  try {
-    return Utilities.formatDate(val, 'Asia/Tokyo', 'HH:mm');
-  } catch(e) {}
-  return String(val).substring(0, 5);
-}
-
 function formatLogDate(val) {
-  if (!val) return '';
-  try {
-    return Utilities.formatDate(new Date(val), 'Asia/Tokyo', 'yyyy/MM/dd');
-  } catch(e) {}
-  try {
-    return Utilities.formatDate(val, 'Asia/Tokyo', 'yyyy/MM/dd');
-  } catch(e) {}
+  if (val instanceof Date) return Utilities.formatDate(val, 'Asia/Tokyo', 'yyyy/MM/dd');
   return String(val).trim();
 }
 
+function formatLogTime(val) {
+  if (val instanceof Date) return Utilities.formatDate(val, 'Asia/Tokyo', 'HH:mm');
+  return String(val).trim().substring(0, 5);
+}
 
 function getLog(dateStr) {
   const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
   const data = sheet.getDataRange().getValues();
-  const target = dateStr || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
   const rows = [];
   for (let i = 1; i < data.length; i++) {
     const rowDate = formatLogDate(data[i][0]);
     if (!rowDate) continue;
-    if (!dateStr || rowDate === target) {
-      rows.push({
-        date:         rowDate,
-        checkinTime:  formatLogTime(data[i][1]),
-        checkoutTime: data[i][2] ? formatLogTime(data[i][2]) : '',
-        memberId:     data[i][3],
-        name:         data[i][4],
-        typeLabel:    data[i][6],
-        duration:     data[i][7] || '',
-        fee:          data[i][8] || '',
-        status:       data[i][9],
-      });
-    }
+    rows.push({
+      date:         rowDate,
+      checkinTime:  formatLogTime(data[i][1]),
+      checkoutTime: data[i][2] ? formatLogTime(data[i][2]) : '',
+      memberId:     data[i][3],
+      name:         data[i][4],
+      typeLabel:    data[i][6],
+      duration:     data[i][7] || '',
+      fee:          data[i][8] || '',
+      status:       data[i][9],
+    });
   }
   return { success: true, logs: rows.reverse() };
 }
@@ -363,18 +348,14 @@ function getActiveUsers() {
   const active = [];
   for (let i = 1; i < data.length; i++) {
     if (data[i][9] === '利用中') {
-      const rawTime = data[i][1];
       active.push({
         memberId:    data[i][3],
         name:        data[i][4],
         typeLabel:   data[i][6],
-        checkinTime: formatLogTime(rawTime),
-        debugRaw:    String(rawTime),
-        debugType:   typeof rawTime,
+        checkinTime: formatLogTime(data[i][1]),
       });
     }
   }
-  console.log('result:', JSON.stringify({ success: true, users: active }));
   return { success: true, users: active };
 }
 

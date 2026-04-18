@@ -49,7 +49,7 @@
   td { padding: 8px 8px; border-bottom: 1px solid #f8f8f6; color: #1a1a1a; vertical-align: middle; }
 
   /* 日付フィルタ */
-  .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; }
+  .filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
   .filter-row input[type=date] { padding: 0.4rem 0.6rem; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 13px; }
   .filter-row button { padding: 0.4rem 0.9rem; background: #1D9E75; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 
@@ -97,10 +97,14 @@
 <div class="section">
   <div class="section-title">入退館ログ</div>
   <div class="filter-row">
-    <input type="date" id="log-date">
+    <span style="font-size:13px;color:#888;">開始</span>
+    <input type="date" id="log-date-from">
+    <span style="font-size:13px;color:#888;">終了</span>
+    <input type="date" id="log-date-to">
     <button onclick="loadLog()">絞り込み</button>
-    <button onclick="document.getElementById('log-date').value=''; loadLog();" style="background:#888;">全件</button>
+    <button onclick="clearFilter()" style="background:#888;">全件</button>
   </div>
+  <div id="log-summary" style="display:none;font-size:13px;font-weight:600;color:#1D9E75;padding:0.5rem 0;border-bottom:1px solid #f0f0ed;margin-bottom:0.5rem;"></div>
   <div id="log-list"></div>
   <div class="last-updated" id="last-updated"></div>
 </div>
@@ -162,15 +166,16 @@ async function loadActiveUsers() {
   try {
     const data = await fetchGAS({ action: 'getActiveUsers' });
     const el = document.getElementById('active-list');
-    document.getElementById('stat-active').textContent = data.users?.length ?? '-';
+    const users = data.users || [];
+    document.getElementById('stat-active').textContent = users.length;
 
-    if (!data.users || data.users.length === 0) {
+    if (users.length === 0) {
       el.innerHTML = '<div class="empty">現在利用中のユーザーはいません</div>';
       return;
     }
-    el.innerHTML = data.users.map(u => `
+    el.innerHTML = users.map(u => `
       <div class="user-item">
-        <div class="user-avatar">${u.name[0]}</div>
+        <div class="user-avatar">${u.name ? u.name[0] : '?'}</div>
         <div style="flex:1;">
           <div class="user-name">${u.name}</div>
           <div class="user-meta">${u.typeLabel} · #${u.memberId}</div>
@@ -178,26 +183,50 @@ async function loadActiveUsers() {
         <div class="user-time">${u.checkinTime} 〜</div>
       </div>
     `).join('');
-  } catch(e) { console.error(e); }
+  } catch(e) {
+    console.error('loadActiveUsers error:', e);
+    document.getElementById('stat-active').textContent = '-';
+  }
 }
 
 async function loadLog() {
   try {
-    const dateVal = document.getElementById('log-date').value.replace(/-/g, '/');
+    const fromVal = document.getElementById('log-date-from').value.replace(/-/g, '/');
+    const toVal   = document.getElementById('log-date-to').value.replace(/-/g, '/');
     const params = { action: 'getLog' };
-    if (dateVal) params.date = dateVal;
+    // 開始日のみ指定の場合は1日絞り込み、両方ある場合は全件取得してフロントでフィルタ
     const data = await fetchGAS(params);
     const el = document.getElementById('log-list');
+    const summary = document.getElementById('log-summary');
 
-    if (!data.logs || data.logs.length === 0) {
+    let logs = data.logs || [];
+
+    // 期間フィルタ
+    if (fromVal || toVal) {
+      logs = logs.filter(l => {
+        const d = String(l.date).trim();
+        if (fromVal && d < fromVal) return false;
+        if (toVal   && d > toVal)   return false;
+        return true;
+      });
+    }
+
+    if (logs.length === 0) {
       el.innerHTML = '<div class="empty">記録がありません</div>';
+      summary.style.display = 'none';
     } else {
-      el.innerHTML = data.logs.map(l => `
+      // 売上合計
+      const total = logs.reduce((sum, l) => sum + (Number(l.fee) || 0), 0);
+      const dropinCount = logs.filter(l => Number(l.fee) > 0).length;
+      summary.style.display = 'block';
+      summary.textContent = `${logs.length}件 ／ ドロップイン売上合計：¥${total.toLocaleString()}（${dropinCount}件）`;
+
+      el.innerHTML = logs.map(l => `
         <div class="log-item">
           <span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span>
           <span class="log-name">${l.name}</span>
           <span class="log-meta">${l.typeLabel}</span>
-          <span class="log-meta">${l.checkinTime}${l.checkoutTime ? ' 〜 ' + l.checkoutTime : ''}</span>
+          <span class="log-meta">${l.date} ${l.checkinTime}${l.checkoutTime ? ' 〜 ' + l.checkoutTime : ''}</span>
           ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : ''}
         </div>
       `).join('');
@@ -206,10 +235,18 @@ async function loadLog() {
   } catch(e) { console.error(e); }
 }
 
+function clearFilter() {
+  document.getElementById('log-date-from').value = '';
+  document.getElementById('log-date-to').value = '';
+  loadLog();
+}
+
 // 今日の日付をデフォルトセット
-document.getElementById('log-date').value = new Date().toISOString().split('T')[0];
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('log-date-from').value = today;
+document.getElementById('log-date-to').value = today;
 loadAll();
-setInterval(loadAll, 60000); // 1分ごとに自動更新
+setInterval(loadAll, 60000);
 </script>
 </body>
 </html>
