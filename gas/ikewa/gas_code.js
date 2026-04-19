@@ -16,11 +16,12 @@ const CONFIG = {
 
 // 会員種別と月額料金
 const MEMBER_TYPES = {
-  'monthly_general':  { label: '月額会員（一般）',     monthly: 8000, isMonthly: true },
-  'monthly_student':  { label: '月額会員（学生）',     monthly: 4000, isMonthly: true },
-  'monthly_weekend':  { label: '月額プラン（土日祝）', monthly: 4000, isMonthly: true },
-  'monthly_weekday':  { label: '月額プラン（平日）',   monthly: 6000, isMonthly: true },
-  'dropin':           { label: 'ドロップイン',         monthly: null, isMonthly: false },
+  'monthly_general':  { label: '月額会員（一般）',         monthly: 8000, isMonthly: true },
+  'monthly_student':  { label: '月額会員（学生）',         monthly: 4000, isMonthly: true },
+  'monthly_weekend':  { label: '月額プラン（土日祝）',     monthly: 4000, isMonthly: true },
+  'monthly_weekday':  { label: '月額プラン（平日）',       monthly: 6000, isMonthly: true },
+  'rental_office':    { label: 'レンタルオフィス入居者',   monthly: 0,    isMonthly: true },
+  'dropin':           { label: 'ドロップイン',             monthly: null, isMonthly: false },
 };
 
 // ============================================================
@@ -534,7 +535,7 @@ function getMailSettings() {
   const data = sheet.getDataRange().getValues();
   const settings = {};
   for (let i = 0; i < data.length; i++) {
-    if (data[i][0]) settings[String(data[i][0]).trim()] = String(data[i][1] || '');
+    if (data[i][0]) settings[String(data[i][0]).trim()] = String(data[i][1] !== undefined && data[i][1] !== null ? data[i][1] : '');
   }
   return { success: true, settings };
 }
@@ -616,7 +617,7 @@ function sendFirstVisitEmail(member, checkinTime, checkoutTime, duration, fee) {
         <tr><td style="color:#0F6E56;padding:3px 0;">月額会員（一般）</td><td>月8,000円〜 毎日使い放題</td></tr>
         <tr><td style="color:#0F6E56;padding:3px 0;">月額会員（学生）</td><td>月4,000円〜 毎日使い放題</td></tr>
       </table>
-      <p style="font-size:11px;color:#0F6E56;margin:10px 0 0;">ご興味あれば <a href="mailto:info@handanotane.com" style="color:#0F6E56;">info@handanotane.com</a> までお気軽にご相談ください。</p>
+      <p style="font-size:11px;color:#0F6E56;margin:10px 0 0;">詳しくは<a href="https://handanotane.com/news/howtousecoworkingspace/" style="color:#0F6E56;">こちらのページ</a>をご覧ください。</p>
     </div>`;
 
   const footer_contact = `<p style="font-size:12px;color:#888;margin:14px 0 0;">ご不明な点は <a href="mailto:info@handanotane.com" style="color:#00a3af;">info@handanotane.com</a> までお気軽にどうぞ。</p>`;
@@ -771,6 +772,7 @@ function syncMembersFromForm(e) {
     '月額会員（学生）':         'monthly_student',
     '月額プラン（土日祝）':     'monthly_weekend',
     '月額プラン（平日）':       'monthly_weekday',
+    'レンタルオフィス入居者':   'rental_office',
   };
 
   const COL_EMAIL     = 14;
@@ -785,12 +787,20 @@ function syncMembersFromForm(e) {
     // トリガー経由：送信された行のデータが e.values に入っている（一瞬で処理）
     row = e.values;
   } else {
-    // 手動実行：ソースシートの最終行を取得
+    // 手動実行：A列に値がある最終行を取得（H列の数式による誤検知を防ぐ）
     const srcSS = SpreadsheetApp.openById(SOURCE_SS_ID);
     const srcSheet = srcSS.getSheets()[0];
-    const lastRow = srcSheet.getLastRow();
+    const colA = srcSheet.getRange('A:A').getValues();
+    let lastRow = 1;
+    for (let i = colA.length - 1; i >= 1; i--) {
+      if (colA[i][0] !== '' && colA[i][0] !== null) {
+        lastRow = i + 1;
+        break;
+      }
+    }
     if (lastRow < 2) return { success: false, error: 'データがありません' };
     row = srcSheet.getRange(lastRow, 1, 1, 16).getValues()[0];
+    console.log('手動実行：最終行番号=' + lastRow, 'L列=' + row[COL_MEMBER_ID]);
   }
 
   const memberId = String(row[COL_MEMBER_ID]).trim();
@@ -816,6 +826,9 @@ function syncMembersFromForm(e) {
   }
 
   destSheet.appendRow([memberId, name, planCode, email, planRaw]);
+  // H列に経過日数の数式を自動挿入
+  const newRow = destSheet.getLastRow();
+  destSheet.getRange(newRow, 8).setFormula(`=IF(G${newRow}="","",TODAY()-G${newRow})`);
   console.log('追加完了: ' + memberId + ' ' + name);
   return { success: true, memberId: memberId, name: name };
 }

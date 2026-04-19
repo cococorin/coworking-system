@@ -13,11 +13,13 @@
 const DEST_SS_ID_STRIPE = '1BIIPZKcEppdvrUoD2TGcGIOXFZVKMqYpsB-fmYJDOzs';
 
 // Stripe商品名 → 会員マスタコード
-const STRIPE_PLAN_MAP = {
-  '月額会員（平日）':  'monthly_weekday',
-  '月額会員（土日祝）': 'monthly_weekend',
-  '月額会員（学生）':  'monthly_student',
-  '月額会員（一般）':  'monthly_general',
+const PLAN_MAP = {
+  'ドロップイン（一時利用）': 'dropin',
+  '月額会員（一般）':         'monthly_general',
+  '月額会員（学生）':         'monthly_student',
+  '月額プラン（土日祝）':     'monthly_weekend',
+  '月額プラン（平日）':       'monthly_weekday',
+  'レンタルオフィス入居者':   'rental_office',   // ← これを追加
 };
 
 // アクティブとみなすStripeサブスクリプションのステータス
