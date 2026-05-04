@@ -13,13 +13,11 @@
 const DEST_SS_ID_STRIPE = '1BIIPZKcEppdvrUoD2TGcGIOXFZVKMqYpsB-fmYJDOzs';
 
 // Stripe商品名 → 会員マスタコード
-const PLAN_MAP = {
-  'ドロップイン（一時利用）': 'dropin',
-  '月額会員（一般）':         'monthly_general',
-  '月額会員（学生）':         'monthly_student',
-  '月額プラン（土日祝）':     'monthly_weekend',
-  '月額プラン（平日）':       'monthly_weekday',
-  'レンタルオフィス入居者':   'rental_office',   // ← これを追加
+const STRIPE_PLAN_MAP = {
+  '月額会員（平日）':  'monthly_weekday',
+  '月額会員（土日祝）': 'monthly_weekend',
+  '月額会員（学生）':  'monthly_student',
+  '月額会員（一般）':  'monthly_general',
 };
 
 // アクティブとみなすStripeサブスクリプションのステータス
@@ -127,6 +125,7 @@ function syncMasterFromAnswerSheet() {
     '月額会員（学生）':         'monthly_student',
     '月額会員（土日祝）':       'monthly_weekend',
     '月額会員（平日）':         'monthly_weekday',
+    'レンタルオフィス入居者':   'rental_office',
   };
 
   const COL_MEMBER_ID = 11; // L列：会員番号
@@ -273,4 +272,40 @@ function setupStripeSyncTrigger() {
     .create();
 
   console.log('Stripe同期トリガーを登録しました（毎日午前3時）');
+}
+
+function debugStripeForMember() {
+  const STRIPE_SECRET_KEY = PropertiesService.getScriptProperties().getProperty('STRIPE_SECRET_KEY');
+  const email = 'sugicoko315@icloud.com';
+  
+  // 顧客検索
+  const res = UrlFetchApp.fetch(
+    `https://api.stripe.com/v1/customers?email=${encodeURIComponent(email)}&limit=1`,
+    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+  );
+  const customers = JSON.parse(res.getContentText()).data;
+  if (!customers.length) { console.log('顧客が見つかりません'); return; }
+  
+  const customerId = customers[0].id;
+  console.log('顧客ID:', customerId);
+  
+  // サブスクリプション取得
+  const subRes = UrlFetchApp.fetch(
+    `https://api.stripe.com/v1/subscriptions?customer=${customerId}&status=active&limit=5`,
+    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+  );
+  const subs = JSON.parse(subRes.getContentText()).data;
+  console.log('サブスク数:', subs.length);
+  
+  subs.forEach(sub => {
+    sub.items.data.forEach(item => {
+      const productId = item.price.product;
+      const productRes = UrlFetchApp.fetch(
+        `https://api.stripe.com/v1/products/${productId}`,
+        { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+      );
+      const product = JSON.parse(productRes.getContentText());
+      console.log('商品名:', product.name, '/ ステータス:', sub.status);
+    });
+  });
 }

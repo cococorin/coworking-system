@@ -192,8 +192,8 @@ function doCheckOut(memberId) {
   let fee = 0;
   let feeLabel = '';
   if (!MEMBER_TYPES[effectiveType]?.isMonthly) {
-    const hours = Math.ceil(diffMin / 60);
-    fee = Math.min(hours * CONFIG.DROPIN_HOURLY, CONFIG.DROPIN_DAILY_MAX);
+    const hours = Math.ceil((diffMin - 9) / 60);  // 9分のバッファ（例：1時間9分→1時間として計算）
+    fee = Math.min(Math.max(hours, 1) * CONFIG.DROPIN_HOURLY, CONFIG.DROPIN_DAILY_MAX);
     feeLabel = `¥${fee.toLocaleString()}`;
   } else {
     feeLabel = '月額会員（追加料金なし）';
@@ -294,12 +294,31 @@ function updateSessionRow(rowIndex, checkoutTime, duration, fee) {
 }
 
 // ============================================================
-// ヘルパー：曜日制限チェック
+// ヘルパー：祝日判定（Googleカレンダー参照）
+// ============================================================
+function isJapaneseHoliday(date) {
+  try {
+    const calendar = CalendarApp.getCalendarById('ja.japanese#holiday@group.v.calendar.google.com');
+    if (!calendar) return false;
+    const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+    const endOfDay   = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
+    const events = calendar.getEvents(startOfDay, endOfDay);
+    return events.length > 0;
+  } catch (e) {
+    console.log('祝日カレンダー取得エラー:', e.message);
+    return false;
+  }
+}
+
+// ============================================================
+// ヘルパー：曜日制限チェック（祝日対応）
 // ============================================================
 function checkDayRestriction(type) {
   const now = new Date();
   const day = now.getDay(); // 0=日, 1=月..., 6=土
-  const isWeekend = (day === 0 || day === 6);
+  const isSatOrSun = (day === 0 || day === 6);
+  const isHoliday  = isJapaneseHoliday(now);
+  const isWeekend  = isSatOrSun || isHoliday; // 土日 または 祝日
 
   if (type === 'monthly_weekend' && !isWeekend) {
     // エラーにせずドロップイン扱いで入館させる
@@ -855,4 +874,40 @@ function setupFormTrigger() {
     .create();
 
   console.log('トリガーを登録しました。フォーム送信時に自動同期されます。');
+}
+
+function debugStripeForMember() {
+  const STRIPE_SECRET_KEY = PropertiesService.getScriptProperties().getProperty('STRIPE_SECRET_KEY');
+  const email = 'sugicoko315@icloud.com';
+  
+  // 顧客検索
+  const res = UrlFetchApp.fetch(
+    `https://api.stripe.com/v1/customers?email=${encodeURIComponent(email)}&limit=1`,
+    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+  );
+  const customers = JSON.parse(res.getContentText()).data;
+  if (!customers.length) { console.log('顧客が見つかりません'); return; }
+  
+  const customerId = customers[0].id;
+  console.log('顧客ID:', customerId);
+  
+  // サブスクリプション取得
+  const subRes = UrlFetchApp.fetch(
+    `https://api.stripe.com/v1/subscriptions?customer=${customerId}&status=active&limit=5`,
+    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+  );
+  const subs = JSON.parse(subRes.getContentText()).data;
+  console.log('サブスク数:', subs.length);
+  
+  subs.forEach(sub => {
+    sub.items.data.forEach(item => {
+      const productId = item.price.product;
+      const productRes = UrlFetchApp.fetch(
+        `https://api.stripe.com/v1/products/${productId}`,
+        { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
+      );
+      const product = JSON.parse(productRes.getContentText());
+      console.log('商品名:', product.name, '/ ステータス:', sub.status);
+    });
+  });
 }
