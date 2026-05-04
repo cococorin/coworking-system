@@ -332,6 +332,44 @@ function checkDayRestriction(type) {
 }
 
 // ============================================================
+// 【検証用】祝日判定とプラン制限の動作確認
+//   引数なし → 今日
+//   引数あり → 'YYYY/MM/DD' または 'YYYY-MM-DD' を渡す
+// 例： debugHolidayCheck('2026/05/04')
+// ============================================================
+function debugHolidayCheck(dateStr) {
+  const date = dateStr ? new Date(String(dateStr).replace(/\//g, '-') + 'T12:00:00+09:00') : new Date();
+  const day = date.getDay();
+  const isSatOrSun = (day === 0 || day === 6);
+  const isHoliday = isJapaneseHoliday(date);
+  const isWeekend = isSatOrSun || isHoliday;
+  console.log('日付: ' + Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy/MM/dd (EEE)'));
+  console.log('  getDay=' + day + ' isSatOrSun=' + isSatOrSun + ' isHoliday=' + isHoliday + ' → isWeekend=' + isWeekend);
+  if (isWeekend) {
+    console.log('  monthly_weekend (土日祝プラン) : ✓ 月額利用OK（追加料金なし）');
+    console.log('  monthly_weekday (平日プラン)   : ❌ ドロップイン扱い（400円/時間）');
+  } else {
+    console.log('  monthly_weekend (土日祝プラン) : ❌ ドロップイン扱い（400円/時間）');
+    console.log('  monthly_weekday (平日プラン)   : ✓ 月額利用OK（追加料金なし）');
+  }
+}
+
+// ============================================================
+// 【検証用】指定会員番号の checkDayRestriction を本日でシミュレーション
+// 例： debugDayRestrictionForMember('10001')
+// ============================================================
+function debugDayRestrictionForMember(memberId) {
+  const member = findMember(memberId);
+  if (!member) { console.log('会員が見つかりません: ' + memberId); return; }
+  console.log('会員番号=' + member.id + ' 氏名=' + member.name + ' 種別コード=' + member.type
+    + ' 種別ラベル=' + (MEMBER_TYPES[member.type] && MEMBER_TYPES[member.type].label));
+  const r = checkDayRestriction(member.type);
+  console.log('checkDayRestriction結果: ok=' + r.ok + ' dropinFallback=' + (r.dropinFallback || false)
+    + ' message=' + (r.message || '(なし)'));
+  debugHolidayCheck();
+}
+
+// ============================================================
 // ヘルパー：メールアドレスで会員検索
 // ============================================================
 function searchByEmail(email) {
