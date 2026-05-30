@@ -38,6 +38,15 @@
   .log-meta { font-size: 12px; color: #888; }
   .log-fee { font-size: 13px; font-weight: 700; color: #1D9E75; }
 
+  /* 料金修正 */
+  .fee-edit-btn { font-size: 11px; color: #1D9E75; background: #E1F5EE; border: none; border-radius: 6px; padding: 2px 7px; margin-left: 6px; cursor: pointer; font-weight: 600; }
+  .fee-edit-btn:hover { background: #cdeee2; }
+  .fee-edit-wrap { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+  .fee-input { width: 78px; padding: 3px 6px; border: 1.5px solid #1D9E75; border-radius: 6px; font-size: 13px; text-align: right; }
+  .fee-save-btn { font-size: 11px; color: #fff; background: #1D9E75; border: none; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-weight: 600; }
+  .fee-save-btn:disabled { opacity: 0.6; cursor: default; }
+  .fee-cancel-btn { font-size: 13px; color: #888; background: #eee; border: none; border-radius: 6px; padding: 2px 8px; cursor: pointer; line-height: 1; }
+
   /* 利用中ユーザー */
   .user-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f0f0ed; }
   .user-item:last-child { border-bottom: none; }
@@ -113,6 +122,21 @@
 </div>
 
 
+<!-- 日別集計 -->
+<div class="section">
+  <div class="section-title">日別集計（直近30日）</div>
+  <table>
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th style="text-align:right;">入館数</th>
+        <th style="text-align:right;">売上（ドロップイン）</th>
+      </tr>
+    </thead>
+    <tbody id="daily-table"></tbody>
+  </table>
+</div>
+
 <!-- メール設定 -->
 <div class="section">
   <div class="section-title">初回利用メール設定</div>
@@ -133,21 +157,6 @@
     <button onclick="saveMailSettings()" style="background:#00a3af;color:#fff;border:none;padding:0.4rem 1.2rem;border-radius:8px;font-size:13px;cursor:pointer;margin-left:8px;">保存</button>
     <span id="mail-save-msg" style="font-size:13px;color:#1D9E75;display:none;">保存しました</span>
   </div>
-</div>
-
-<!-- 日別集計 -->
-<div class="section">
-  <div class="section-title">日別集計（直近30日）</div>
-  <table>
-    <thead>
-      <tr>
-        <th>日付</th>
-        <th style="text-align:right;">入館数</th>
-        <th style="text-align:right;">売上（ドロップイン）</th>
-      </tr>
-    </thead>
-    <tbody id="daily-table"></tbody>
-  </table>
 </div>
 
 <script>
@@ -271,7 +280,10 @@ async function loadLog() {
                 <td class="log-meta">${l.checkinTime}</td>
                 <td class="log-meta">${l.checkoutTime || '-'}</td>
                 <td class="log-meta">${l.duration || '-'}</td>
-                <td style="text-align:right;">${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}</td>
+                <td style="text-align:right;white-space:nowrap;">
+                  ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}
+                  <button class="fee-edit-btn" onclick="editFee(${l.rowIndex}, ${Number(l.fee) || 0}, this)">修正</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -286,6 +298,47 @@ function clearFilter() {
   document.getElementById('log-date-from').value = '';
   document.getElementById('log-date-to').value = '';
   loadLog();
+}
+
+// 料金の手動修正（割引券利用などに対応）
+function editFee(rowIndex, currentFee, btn) {
+  const td = btn.closest('td');
+  td.innerHTML = `
+    <div class="fee-edit-wrap">
+      <span style="font-size:13px;color:#888;">¥</span>
+      <input type="number" min="0" step="1" value="${currentFee}" class="fee-input" onkeydown="if(event.key==='Enter'){this.nextElementSibling.click();}else if(event.key==='Escape'){loadLog();}">
+      <button class="fee-save-btn" onclick="saveFee(${rowIndex}, this)">保存</button>
+      <button class="fee-cancel-btn" onclick="loadLog()" title="キャンセル">×</button>
+    </div>`;
+  const input = td.querySelector('.fee-input');
+  input.focus();
+  input.select();
+}
+
+async function saveFee(rowIndex, btn) {
+  const input = btn.closest('td').querySelector('.fee-input');
+  const newFee = input.value;
+  if (newFee === '' || Number(newFee) < 0 || isNaN(Number(newFee))) {
+    alert('0以上の金額を入力してください');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const data = await fetchGAS({ action: 'updateFee', rowIndex: rowIndex, fee: newFee });
+    if (data.success) {
+      // ログと集計を再読込して反映
+      await Promise.all([loadLog(), loadStats()]);
+    } else {
+      alert('保存に失敗しました: ' + (data.error || '不明なエラー'));
+      btn.disabled = false;
+      btn.textContent = '保存';
+    }
+  } catch(e) {
+    alert('通信エラー: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '保存';
+  }
 }
 
 // 今日の日付をデフォルトセット

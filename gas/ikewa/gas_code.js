@@ -28,6 +28,7 @@ const MEMBER_TYPES = {
 // メインエントリーポイント（GETリクエスト処理）
 // ============================================================
 function doGet(e) {
+  e = e || {};
   const params = e.parameter || {};
   // 受信停止ページ
   if (params.action === 'unsubscribe') {
@@ -57,7 +58,7 @@ h2{color:#ce5242;}p{color:#555;font-size:14px;}</style></head>
 
 // POSTリクエスト処理
 function doPost(e) {
-  return handleRequest(e);
+  return handleRequest(e || {});
 }
 
 function handleRequest(e) {
@@ -78,6 +79,9 @@ function handleRequest(e) {
         break;
       case 'getLog':
         result = getLog(params.date);
+        break;
+      case 'updateFee':
+        result = updateFee(params);
         break;
       case 'getStats':
         result = getStats();
@@ -426,6 +430,7 @@ function getLog(dateStr) {
     const rowDate = formatLogDate(data[i][0]);
     if (!rowDate) continue;
     rows.push({
+      rowIndex:     i + 1,
       date:         rowDate,
       checkinTime:  formatLogTime(data[i][1]),
       checkoutTime: data[i][2] ? formatLogTime(data[i][2]) : '',
@@ -438,6 +443,27 @@ function getLog(dateStr) {
     });
   }
   return { success: true, logs: rows.reverse() };
+}
+
+// ============================================================
+// ヘルパー：料金の手動修正（割引券利用などに対応）
+// 料金列（9列目）のみを上書きする
+// ============================================================
+function updateFee(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) {
+    return { success: false, error: '対象行が不正です' };
+  }
+  const fee = Math.round(Number(params.fee));
+  if (isNaN(fee) || fee < 0) {
+    return { success: false, error: '金額が不正です' };
+  }
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  if (rowIndex > sheet.getLastRow()) {
+    return { success: false, error: '対象行が見つかりません' };
+  }
+  sheet.getRange(rowIndex, 9).setValue(fee > 0 ? fee : '');
+  return { success: true, rowIndex: rowIndex, fee: fee };
 }
 
 // ============================================================
