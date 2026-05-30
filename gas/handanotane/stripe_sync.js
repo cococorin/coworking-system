@@ -30,6 +30,11 @@ const PLAN_CODE_TO_LABEL = {
 
 const DROPIN_LABEL = 'ドロップイン（一時利用）';
 
+// Stripeで課金管理しない（手動運用の）プランの回答シートI列ラベル。
+// レンタルオフィス入居者などはStripeに有効サブスクが無いため、
+// Stripe同期では絶対に上書き（ドロップイン化）しない。
+const STRIPE_UNMANAGED_PLANS = ['レンタルオフィス入居者'];
+
 // アクティブとみなすStripeサブスクリプションのステータス
 const ACTIVE_STATUSES = ['active', 'trialing'];
 
@@ -102,6 +107,14 @@ function _runStripeSync(options) {
 
     const currentPlan = String(data[rowIdx][COL_PLAN]).trim();
 
+    // Stripe管理外プラン（レンタルオフィス等）はStripeの状態に関わらず維持。
+    // これらはStripeに有効サブスクが無いため、放置するとドロップインに上書きされてしまう。
+    if (STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) {
+      console.log(`保護(Stripe管理外): ${data[rowIdx][2]} (${emailKey}) — 既存値「${currentPlan}」を維持`);
+      preserved++;
+      continue;
+    }
+
     // active ありだが商品名が未知 → 危険な上書きを避け、既存値を維持
     if (decision.preserve) {
       console.log(`保留: ${data[rowIdx][2]} (${emailKey}) — 既存値「${currentPlan}」を維持 [${decision.reason}]`);
@@ -120,6 +133,8 @@ function _runStripeSync(options) {
   for (const [emailKey, rowIdx] of Object.entries(emailToRow)) {
     if (processedEmails.has(emailKey)) continue;
     const currentPlan = String(data[rowIdx][COL_PLAN]).trim();
+    // Stripe管理外プラン（レンタルオフィス等）は維持
+    if (STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) continue;
     if (currentPlan !== DROPIN_LABEL && currentPlan.startsWith('月額')) {
       if (!dryRun) sheet.getRange(rowIdx + 1, COL_PLAN + 1).setValue(DROPIN_LABEL);
       console.log(`${dryRun ? '[DRY-RUN] ' : ''}解約扱いに変更: ${data[rowIdx][2]} (${emailKey}) "${currentPlan}" → "${DROPIN_LABEL}"`);
@@ -240,6 +255,82 @@ function syncMasterFromAnswerSheet() {
   }
 
   console.log(`会員マスタ同期完了: 更新 ${updated}件 / スキップ ${skipped}件`);
+}
+
+// ============================================================
+// 【復旧】過去のバグでドロップイン化されたレンタルオフィス入居者を元に戻す
+//   正解の判定：会員マスタ E列（備考）が「レンタルオフィス入居者」
+//   - 会員マスタ C列（会員種別）を 'rental_office' に
+//   - 回答シート I列（プラン）を「レンタルオフィス入居者」に
+//     （I列を直さないと、毎日のStripe同期で再びドロップイン化されるため）
+//
+//   まず dryRunRepairRentalOffice() で変更内容をログ確認 →
+//   問題なければ repairRentalOffice() を実行して反映してください。
+// ============================================================
+const RENTAL_OFFICE_LABEL = 'レンタルオフィス入居者';
+const RENTAL_OFFICE_CODE  = 'rental_office';
+
+function dryRunRepairRentalOffice() {
+  return _repairRentalOffice({ dryRun: true });
+}
+
+function repairRentalOffice() {
+  return _repairRentalOffice({ dryRun: false });
+}
+
+function _repairRentalOffice(options) {
+  const dryRun = !!(options && options.dryRun);
+
+  // 会員マスタ
+  const masterSS = SpreadsheetApp.openById('1knYE9NMyYkVAWQqqNb5DsUoUHLAF4RFVQ3k6MOzTgCU');
+  const masterSheet = masterSS.getSheetByName('会員マスタ');
+  if (!masterSheet) { console.log('会員マスタシートが見つかりません'); return { success: false }; }
+  const mData = masterSheet.getDataRange().getValues();
+
+  // 回答シート（会員番号 → 行インデックス）
+  const ansSS = SpreadsheetApp.openById(DEST_SS_ID_STRIPE);
+  const ansSheet = ansSS.getSheets()[0];
+  const ansData = ansSheet.getDataRange().getValues();
+  const COL_ANS_MEMBER_ID = 11; // L列
+  const COL_ANS_PLAN      = 8;  // I列
+  const ansIdToRow = {};
+  for (let i = 1; i < ansData.length; i++) {
+    const id = parseInt(String(ansData[i][COL_ANS_MEMBER_ID]).trim(), 10);
+    if (!isNaN(id)) ansIdToRow[id] = i;
+  }
+
+  let fixedMaster = 0, fixedAnswer = 0, scanned = 0;
+
+  for (let i = 1; i < mData.length; i++) {
+    const note = String(mData[i][4]).trim(); // E列：備考（登録時プラン）
+    if (note !== RENTAL_OFFICE_LABEL) continue;
+    scanned++;
+
+    const memberId = parseInt(String(mData[i][0]).trim(), 10);
+    const name = mData[i][1];
+
+    // 会員マスタ C列（種別コード）を修正
+    const currentCode = String(mData[i][2]).trim();
+    if (currentCode !== RENTAL_OFFICE_CODE) {
+      if (!dryRun) masterSheet.getRange(i + 1, 3).setValue(RENTAL_OFFICE_CODE);
+      console.log(`${dryRun ? '[DRY-RUN] ' : ''}会員マスタ修正: ${name} (#${memberId}) C列 "${currentCode}" → "${RENTAL_OFFICE_CODE}"`);
+      fixedMaster++;
+    }
+
+    // 回答シート I列（プラン）を修正（再上書き防止のため）
+    if (!isNaN(memberId) && ansIdToRow[memberId] !== undefined) {
+      const r = ansIdToRow[memberId];
+      const currentPlan = String(ansData[r][COL_ANS_PLAN]).trim();
+      if (currentPlan !== RENTAL_OFFICE_LABEL) {
+        if (!dryRun) ansSheet.getRange(r + 1, COL_ANS_PLAN + 1).setValue(RENTAL_OFFICE_LABEL);
+        console.log(`${dryRun ? '[DRY-RUN] ' : ''}回答シート修正: ${name} (#${memberId}) I列 "${currentPlan}" → "${RENTAL_OFFICE_LABEL}"`);
+        fixedAnswer++;
+      }
+    }
+  }
+
+  console.log(`${dryRun ? '[DRY-RUN] ' : ''}復旧完了: 対象 ${scanned}名 / 会員マスタ修正 ${fixedMaster}件 / 回答シート修正 ${fixedAnswer}件`);
+  return { success: true, dryRun, scanned, fixedMaster, fixedAnswer };
 }
 
 // ============================================================
