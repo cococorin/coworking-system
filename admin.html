@@ -67,6 +67,24 @@
 
   .empty { font-size: 13px; color: #bbb; text-align: center; padding: 1.5rem 0; }
   .last-updated { font-size: 11px; color: #bbb; text-align: right; margin-top: 0.5rem; }
+
+  /* 入退館ログ ヘッダー（フィルタ＋集計パネル） */
+  .log-head { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; margin-bottom: 0.5rem; }
+  .log-head-left { flex: 1; min-width: 260px; }
+  #log-list { overflow-x: auto; }
+
+  /* 累積集計パネル */
+  .log-stats { width: 300px; flex-shrink: 0; background: #f8fbfa; border: 1px solid #e3efe9; border-radius: 12px; padding: 0.85rem 1rem; font-size: 12px; }
+  .log-stats h4 { font-size: 11px; color: #0F6E56; font-weight: 700; margin: 0 0 6px; letter-spacing: 0.02em; }
+  .log-stats .ls-section + .ls-section { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e3efe9; }
+  .log-stats .ls-row { display: flex; justify-content: space-between; padding: 2px 0; color: #444; }
+  .log-stats .ls-row .v { font-weight: 700; color: #1a1a1a; }
+  .log-stats .ls-sub { padding-left: 10px; color: #999; font-size: 11px; }
+
+  /* ラジオセル（利用者区分・支払い方法） */
+  .radio-cell { white-space: nowrap; }
+  .radio-cell label { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: #555; cursor: pointer; margin-right: 6px; }
+  .radio-cell input { margin: 0; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -105,6 +123,27 @@
   <div id="active-list"></div>
 </div>
 
+<!-- 入退館ログ -->
+<div class="section">
+  <div class="section-title">入退館ログ</div>
+  <div class="log-head">
+    <div class="log-head-left">
+      <div class="filter-row">
+        <span style="font-size:13px;color:#888;">開始</span>
+        <input type="date" id="log-date-from">
+        <span style="font-size:13px;color:#888;">終了</span>
+        <input type="date" id="log-date-to">
+        <button onclick="loadLog()">絞り込み</button>
+        <button onclick="clearFilter()" style="background:#888;">全件</button>
+      </div>
+      <div id="log-summary" style="display:none;font-size:13px;font-weight:600;color:#1D9E75;padding:0.5rem 0;"></div>
+    </div>
+    <div id="log-stats" class="log-stats" style="display:none;"></div>
+  </div>
+  <div id="log-list"></div>
+  <div class="last-updated" id="last-updated"></div>
+</div>
+
 <!-- 月額会員・レンタルオフィス入居者 -->
 <div class="section">
   <div class="section-title">
@@ -119,22 +158,6 @@
     レンタルオフィス入居者 <span id="rental-count" style="font-weight:600;color:#888;font-size:12px;"></span>
   </div>
   <div id="rental-list"></div>
-</div>
-
-<!-- 入退館ログ -->
-<div class="section">
-  <div class="section-title">入退館ログ</div>
-  <div class="filter-row">
-    <span style="font-size:13px;color:#888;">開始</span>
-    <input type="date" id="log-date-from">
-    <span style="font-size:13px;color:#888;">終了</span>
-    <input type="date" id="log-date-to">
-    <button onclick="loadLog()">絞り込み</button>
-    <button onclick="clearFilter()" style="background:#888;">全件</button>
-  </div>
-  <div id="log-summary" style="display:none;font-size:13px;font-weight:600;color:#1D9E75;padding:0.5rem 0;border-bottom:1px solid #f0f0ed;margin-bottom:0.5rem;"></div>
-  <div id="log-list"></div>
-  <div class="last-updated" id="last-updated"></div>
 </div>
 
 
@@ -299,6 +322,77 @@ async function loadCurrentMembers() {
   }
 }
 
+// 現在表示中のログ（ラジオ変更時の即時再集計に使用）
+let displayedLogs = [];
+
+// 月額利用かドロップイン利用かを種別コードで判定（コードが無い場合は料金で代替判定）
+function isMonthlyLog(l) {
+  const c = String(l.type || '');
+  if (c) return c.indexOf('monthly_') === 0 || c === 'rental_office';
+  return (Number(l.fee) || 0) === 0;
+}
+
+// 利用者区分の実効値（管理者が未設定なら種別から推定：学生プランのみ学生、他は一般）
+function effUserKind(l) {
+  if (l.userKind === '一般' || l.userKind === '学生') return l.userKind;
+  return String(l.type || '') === 'monthly_student' ? '学生' : '一般';
+}
+
+// 支払い方法の実効値（未設定なら現金）
+function effPayment(l) {
+  return l.payment === '現金以外' ? '現金以外' : '現金';
+}
+
+// ラジオ変更：ローカル即時反映＋集計更新→スプレッドシートに保存
+async function setLogAttr(rowIndex, field, value) {
+  const log = displayedLogs.find(l => l.rowIndex === rowIndex);
+  if (log) { log[field] = value; renderLogStats(); }
+  try {
+    const data = await fetchGAS({ action: 'updateLogAttr', rowIndex: rowIndex, field: field, value: value });
+    if (!data.success) console.error('updateLogAttr failed:', data.error);
+  } catch (e) {
+    console.error('setLogAttr error:', e);
+  }
+}
+
+// 累積集計パネルを描画
+function renderLogStats() {
+  const el = document.getElementById('log-stats');
+  if (!displayedLogs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  let mG = 0, mS = 0, dG = 0, dS = 0;        // 利用人数の内訳
+  let cash = 0, ncTotal = 0, ncG = 0, ncS = 0; // 支払い方法別の金額
+  displayedLogs.forEach(l => {
+    const monthly = isMonthlyLog(l);
+    const kind = effUserKind(l);
+    const fee = Number(l.fee) || 0;
+    if (monthly) { kind === '学生' ? mS++ : mG++; }
+    else         { kind === '学生' ? dS++ : dG++; }
+    if (fee > 0) {
+      if (effPayment(l) === '現金') { cash += fee; }
+      else { ncTotal += fee; kind === '学生' ? (ncS += fee) : (ncG += fee); }
+    }
+  });
+
+  const y = n => '¥' + n.toLocaleString();
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="ls-section">
+      <h4>利用人数の内訳</h4>
+      <div class="ls-row"><span>月額・一般</span><span class="v">${mG}名</span></div>
+      <div class="ls-row"><span>月額・学生</span><span class="v">${mS}名</span></div>
+      <div class="ls-row"><span>ドロップイン・一般</span><span class="v">${dG}名</span></div>
+      <div class="ls-row"><span>ドロップイン・学生</span><span class="v">${dS}名</span></div>
+    </div>
+    <div class="ls-section">
+      <h4>支払い方法別の金額</h4>
+      <div class="ls-row"><span>現金</span><span class="v">${y(cash)}</span></div>
+      <div class="ls-row"><span>現金以外</span><span class="v">${y(ncTotal)}</span></div>
+      <div class="ls-row ls-sub"><span>└ 一般</span><span>${y(ncG)}</span></div>
+      <div class="ls-row ls-sub"><span>└ 学生</span><span>${y(ncS)}</span></div>
+    </div>`;
+}
+
 async function loadLog() {
   try {
     const fromVal = document.getElementById('log-date-from').value.replace(/-/g, '/');
@@ -321,9 +415,12 @@ async function loadLog() {
       });
     }
 
+    displayedLogs = logs;
+
     if (logs.length === 0) {
       el.innerHTML = '<div class="empty">記録がありません</div>';
       summary.style.display = 'none';
+      renderLogStats();
     } else {
       // 売上合計
       const total = logs.reduce((sum, l) => sum + (Number(l.fee) || 0), 0);
@@ -342,11 +439,16 @@ async function loadLog() {
               <th>入館</th>
               <th>退館</th>
               <th>利用時間</th>
+              <th>利用者</th>
               <th style="text-align:right;">料金</th>
+              <th>支払い</th>
             </tr>
           </thead>
           <tbody>
-            ${logs.map(l => `
+            ${logs.map(l => {
+              const effKind = effUserKind(l);
+              const effPay  = effPayment(l);
+              return `
               <tr>
                 <td><span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span></td>
                 <td class="log-name">${l.name}</td>
@@ -355,15 +457,25 @@ async function loadLog() {
                 <td class="log-meta">${l.checkinTime}</td>
                 <td class="log-meta">${l.checkoutTime || '-'}</td>
                 <td class="log-meta">${l.duration || '-'}</td>
+                <td class="radio-cell">
+                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '一般' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'userKind', '一般')">一般</label>
+                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '学生' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'userKind', '学生')">学生</label>
+                </td>
                 <td style="text-align:right;white-space:nowrap;">
                   ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}
                   <button class="fee-edit-btn" onclick="editFee(${l.rowIndex}, ${Number(l.fee) || 0}, this)">修正</button>
                 </td>
+                <td class="radio-cell">
+                  <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'payment', '現金')">現金</label>
+                  <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金以外' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'payment', '現金以外')">現金以外</label>
+                </td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </tbody>
         </table>
       `;
+      renderLogStats();
     }
     document.getElementById('last-updated').textContent = '最終更新: ' + new Date().toLocaleTimeString('ja-JP');
   } catch(e) { console.error(e); }

@@ -83,6 +83,9 @@ function handleRequest(e) {
       case 'updateFee':
         result = updateFee(params);
         break;
+      case 'updateLogAttr':
+        result = updateLogAttr(params);
+        break;
       case 'getStats':
         result = getStats();
         break;
@@ -439,10 +442,13 @@ function getLog(dateStr) {
       checkoutTime: data[i][2] ? formatLogTime(data[i][2]) : '',
       memberId:     data[i][3],
       name:         data[i][4],
+      type:         String(data[i][5] || '').trim(),  // 会員種別コード（月額/ドロップイン判定用）
       typeLabel:    data[i][6],
       duration:     data[i][7] || '',
       fee:          data[i][8] || '',
       status:       data[i][9],
+      userKind:     data[i][10] ? String(data[i][10]).trim() : '',  // K列：学生/一般（管理者設定）
+      payment:      data[i][11] ? String(data[i][11]).trim() : '',  // L列：現金/現金以外（管理者設定）
     });
   }
   return { success: true, logs: rows.reverse() };
@@ -467,6 +473,44 @@ function updateFee(params) {
   }
   sheet.getRange(rowIndex, 9).setValue(fee > 0 ? fee : '');
   return { success: true, rowIndex: rowIndex, fee: fee };
+}
+
+// ============================================================
+// ヘルパー：ログ行の属性（利用者区分・支払い方法）を保存
+//   field='userKind' → K列（11列目）に '学生' / '一般'
+//   field='payment'  → L列（12列目）に '現金' / '現金以外'
+// 管理者画面のラジオボタン操作で呼ばれる
+// ============================================================
+function updateLogAttr(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) {
+    return { success: false, error: '対象行が不正です' };
+  }
+  const field = String(params.field || '');
+  const value = String(params.value || '');
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  if (rowIndex > sheet.getLastRow()) {
+    return { success: false, error: '対象行が見つかりません' };
+  }
+  ensureLogAttrHeaders(sheet);
+
+  let col;
+  if (field === 'userKind') col = 11;       // K列
+  else if (field === 'payment') col = 12;   // L列
+  else return { success: false, error: '不明なフィールドです: ' + field };
+
+  sheet.getRange(rowIndex, col).setValue(value);
+  return { success: true, rowIndex: rowIndex, field: field, value: value };
+}
+
+// 既存ログシートに利用者区分・支払い方法のヘッダーが無ければ追加する
+function ensureLogAttrHeaders(sheet) {
+  if (!String(sheet.getRange(1, 11).getValue()).trim()) {
+    sheet.getRange(1, 11).setValue('利用者区分').setFontWeight('bold').setBackground('#E1F5EE');
+  }
+  if (!String(sheet.getRange(1, 12).getValue()).trim()) {
+    sheet.getRange(1, 12).setValue('支払い方法').setFontWeight('bold').setBackground('#E1F5EE');
+  }
 }
 
 // ============================================================
@@ -900,8 +944,8 @@ function getOrCreateSheet(name) {
 
 function ensureLogHeader(sheet) {
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['日付', '入館時刻', '退館時刻', '会員番号', '氏名', '会員種別コード', '会員種別', '利用時間', '料金', '状態']);
-    sheet.getRange(1, 1, 1, 10).setFontWeight('bold').setBackground('#E1F5EE');
+    sheet.appendRow(['日付', '入館時刻', '退館時刻', '会員番号', '氏名', '会員種別コード', '会員種別', '利用時間', '料金', '状態', '利用者区分', '支払い方法']);
+    sheet.getRange(1, 1, 1, 12).setFontWeight('bold').setBackground('#E1F5EE');
   }
 }
 
