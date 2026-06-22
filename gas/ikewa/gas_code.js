@@ -537,6 +537,60 @@ function getCurrentMembers() {
 }
 
 // ============================================================
+// 【検証用】管理画面「月額会員はいません」表示の原因切り分け
+// GASエディタから手動実行 → 実行ログを確認
+//   ・会員マスタの行数と種別ごとの内訳
+//   ・getCurrentMembers() の返却値
+//   ・想定外の値が C列 に入っていないか
+// ============================================================
+function debugCurrentMembers() {
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
+  const data = sheet.getDataRange().getValues();
+  console.log('[1] 会員マスタ総行数（ヘッダ含む）: ' + data.length);
+
+  const typeCount = {};
+  const unknownRows = [];
+  const KNOWN = ['monthly_general', 'monthly_weekday', 'monthly_weekend', 'monthly_student', 'rental_office', 'dropin'];
+  for (let i = 1; i < data.length; i++) {
+    const id = String(data[i][0]).trim();
+    if (!id) continue;
+    const type = String(data[i][2]).trim();
+    typeCount[type] = (typeCount[type] || 0) + 1;
+    if (KNOWN.indexOf(type) === -1) {
+      unknownRows.push({ row: i + 1, id: id, name: data[i][1], type: type });
+    }
+  }
+  console.log('[2] 種別ごとの件数:');
+  for (const k of Object.keys(typeCount)) {
+    console.log('    "' + k + '" : ' + typeCount[k] + '件');
+  }
+  if (unknownRows.length > 0) {
+    console.log('[3] ❌ 想定外の種別コードが入っている行:');
+    for (const r of unknownRows) {
+      console.log('    行' + r.row + ' #' + r.id + ' ' + r.name + ' / C列="' + r.type + '"');
+    }
+  } else {
+    console.log('[3] 想定外の種別コードはありません');
+  }
+
+  const result = getCurrentMembers();
+  console.log('[4] getCurrentMembers() 結果:');
+  console.log('    monthly: ' + result.monthly.length + '名 / rental: ' + result.rental.length + '名');
+  if (result.monthly.length > 0) {
+    console.log('    monthly内訳:');
+    for (const m of result.monthly) {
+      console.log('      #' + m.memberId + ' ' + m.name + ' (' + m.type + ')');
+    }
+  }
+  if (result.rental.length > 0) {
+    console.log('    rental内訳:');
+    for (const r of result.rental) {
+      console.log('      #' + r.memberId + ' ' + r.name);
+    }
+  }
+}
+
+// ============================================================
 // ヘルパー：統計データ取得
 // ============================================================
 function getStats() {
