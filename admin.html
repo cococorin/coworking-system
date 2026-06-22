@@ -336,10 +336,21 @@ async function loadCurrentMembers() {
 let displayedLogs = [];
 
 // 月額利用かドロップイン利用かを種別コードで判定（コードが無い場合は料金で代替判定）
+// ※レンタルオフィス入居者もここでは「月額側（料金なし）」として true を返す
 function isMonthlyLog(l) {
   const c = String(l.type || '');
   if (c) return c.indexOf('monthly_') === 0 || c === 'rental_office';
   return (Number(l.fee) || 0) === 0;
+}
+
+// レンタルオフィス入居者かどうか
+function isRentalLog(l) {
+  return String(l.type || '') === 'rental_office';
+}
+
+// 月額会員の学生/一般は会員種別から自動判定（学生プランのみ「学生」）
+function monthlyKind(l) {
+  return String(l.type || '') === 'monthly_student' ? '学生' : '一般';
 }
 
 // 利用者区分の実効値（未設定は「一般」をプリセット）
@@ -394,15 +405,18 @@ function renderLogStats() {
   const el = document.getElementById('log-stats');
   if (!displayedLogs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
 
-  let mG = 0, mS = 0, dG = 0, dS = 0;                 // 利用人数の内訳
+  let mG = 0, mS = 0, dG = 0, dS = 0, rental = 0;     // 利用人数の内訳
   let dGcash = 0, dGnon = 0, dScash = 0, dSnon = 0;   // ドロップインの支払い内訳（区分×支払い方法）
   displayedLogs.forEach(l => {
-    const monthly = isMonthlyLog(l);
-    const kind = effUserKind(l);
     const fee = Number(l.fee) || 0;
-    if (monthly) {
-      kind === '学生' ? mS++ : mG++;
+    if (isRentalLog(l)) {
+      rental++;
+    } else if (isMonthlyLog(l)) {
+      // 月額会員の学生/一般は会員種別から判定
+      monthlyKind(l) === '学生' ? mS++ : mG++;
     } else {
+      // ドロップインの学生/一般は管理者ラジオ（既定は一般）
+      const kind = effUserKind(l);
       kind === '学生' ? dS++ : dG++;
       if (fee > 0) {
         const cash = effPayment(l) === '現金';
@@ -424,6 +438,7 @@ function renderLogStats() {
         <div class="ls-row"><span>月額・学生</span><span class="v">${mS}名</span></div>
         <div class="ls-row"><span>ドロップイン・一般</span><span class="v">${dG}名</span></div>
         <div class="ls-row"><span>ドロップイン・学生</span><span class="v">${dS}名</span></div>
+        <div class="ls-row"><span>レンタルオフィス入居者</span><span class="v">${rental}名</span></div>
       </div>
       <div class="ls-col">
         <h4>支払い方法別の金額</h4>
@@ -491,8 +506,9 @@ async function loadLog() {
             ${logs.map(l => {
               const effKind = effUserKind(l);
               const effPay  = effPayment(l);
-              const monthly = isMonthlyLog(l);
-              const confirmed = !!(l.userKind);  // 保存済みなら確定済み表示
+              const rental  = isRentalLog(l);
+              const dropin  = !isMonthlyLog(l);   // 月額・レンタルは false
+              const confirmed = !!(l.userKind);   // 保存済みなら確定済み表示
               return `
               <tr>
                 <td><span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span></td>
@@ -503,21 +519,25 @@ async function loadLog() {
                 <td class="log-meta">${l.checkoutTime || '-'}</td>
                 <td class="log-meta">${l.duration || '-'}</td>
                 <td class="radio-cell">
-                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '一般' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '一般')">一般</label>
-                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '学生' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '学生')">学生</label>
+                  ${dropin
+                    ? `<label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '一般' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '一般')">一般</label>
+                       <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '学生' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '学生')">学生</label>`
+                    : (rental ? '<span class="log-meta">-</span>' : `<span class="log-meta">${monthlyKind(l)}</span>`)}
                 </td>
                 <td style="text-align:right;white-space:nowrap;">
                   ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}
                   <button class="fee-edit-btn" onclick="editFee(${l.rowIndex}, ${Number(l.fee) || 0}, this)">修正</button>
                 </td>
                 <td class="radio-cell">
-                  ${monthly
-                    ? '<span class="log-meta">-</span>'
-                    : `<label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金')">現金</label>
-                       <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金以外' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金以外')">現金以外</label>`}
+                  ${dropin
+                    ? `<label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金')">現金</label>
+                       <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金以外' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金以外')">現金以外</label>`
+                    : '<span class="log-meta">-</span>'}
                 </td>
                 <td>
-                  <button class="confirm-btn ${confirmed ? 'confirmed' : ''}" id="confirm-${l.rowIndex}" onclick="confirmLogRow(${l.rowIndex}, this)">${confirmed ? '確定済' : '確定'}</button>
+                  ${dropin
+                    ? `<button class="confirm-btn ${confirmed ? 'confirmed' : ''}" id="confirm-${l.rowIndex}" onclick="confirmLogRow(${l.rowIndex}, this)">${confirmed ? '確定済' : '確定'}</button>`
+                    : ''}
                 </td>
               </tr>
             `;
