@@ -105,6 +105,22 @@
   <div id="active-list"></div>
 </div>
 
+<!-- 月額会員・レンタルオフィス入居者 -->
+<div class="section">
+  <div class="section-title">
+    月額会員・レンタルオフィス入居者
+    <button class="refresh-btn" onclick="loadCurrentMembers()">更新</button>
+  </div>
+  <div style="font-size:13px;font-weight:700;color:#1a1a1a;margin:0 0 0.4rem;">
+    月額会員 <span id="monthly-count" style="font-weight:600;color:#888;font-size:12px;"></span>
+  </div>
+  <div id="monthly-list"></div>
+  <div style="font-size:13px;font-weight:700;color:#1a1a1a;margin:1.25rem 0 0.4rem;">
+    レンタルオフィス入居者 <span id="rental-count" style="font-weight:600;color:#888;font-size:12px;"></span>
+  </div>
+  <div id="rental-list"></div>
+</div>
+
 <!-- 入退館ログ -->
 <div class="section">
   <div class="section-title">入退館ログ</div>
@@ -171,7 +187,7 @@ async function fetchGAS(params) {
 }
 
 async function loadAll() {
-  await Promise.all([loadStats(), loadActiveUsers(), loadLog()]);
+  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog()]);
 }
 
 async function loadStats() {
@@ -221,6 +237,45 @@ async function loadActiveUsers() {
   } catch(e) {
     console.error('loadActiveUsers error:', e);
     document.getElementById('stat-active').textContent = '-';
+  }
+}
+
+async function loadCurrentMembers() {
+  try {
+    const data = await fetchGAS({ action: 'getCurrentMembers' });
+    const monthly = data.monthly || [];
+    const rental  = data.rental  || [];
+
+    document.getElementById('monthly-count').textContent = `（${monthly.length}名）`;
+    document.getElementById('rental-count').textContent  = `（${rental.length}名）`;
+
+    const mEl = document.getElementById('monthly-list');
+    mEl.innerHTML = monthly.length === 0
+      ? '<div class="empty">月額会員はいません</div>'
+      : monthly.map(u => `
+        <div class="user-item">
+          <div class="user-avatar">${u.name ? u.name[0] : '?'}</div>
+          <div style="flex:1;">
+            <div class="user-name">${u.name}</div>
+            <div class="user-meta">${u.typeLabel} · #${u.memberId}</div>
+          </div>
+        </div>
+      `).join('');
+
+    const rEl = document.getElementById('rental-list');
+    rEl.innerHTML = rental.length === 0
+      ? '<div class="empty">レンタルオフィス入居者はいません</div>'
+      : rental.map(u => `
+        <div class="user-item">
+          <div class="user-avatar">${u.name ? u.name[0] : '?'}</div>
+          <div style="flex:1;">
+            <div class="user-name">${u.name}</div>
+            <div class="user-meta">#${u.memberId}</div>
+          </div>
+        </div>
+      `).join('');
+  } catch(e) {
+    console.error('loadCurrentMembers error:', e);
   }
 }
 

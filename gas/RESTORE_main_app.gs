@@ -92,9 +92,6 @@ function handleRequest(e) {
       case 'getActiveUsers':
         result = getActiveUsers();
         break;
-      case 'getCurrentMembers':
-        result = getCurrentMembers();
-        break;
       case 'getMailSettings':
         result = getMailSettings();
         break;
@@ -487,53 +484,6 @@ function getActiveUsers() {
     }
   }
   return { success: true, users: active };
-}
-
-// ============================================================
-// ヘルパー：月額会員・レンタルオフィス入居者の一覧取得
-// 会員マスタ（このスプレッドシート）を正として取得する。
-//   月額会員：種別順（一般→平日→土日祝→学生）、同種別内は会員番号順
-//   レンタルオフィス入居者：会員番号順
-// ============================================================
-function getCurrentMembers() {
-  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
-  const data = sheet.getDataRange().getValues();
-
-  // 月額会員の種別表示順
-  const MONTHLY_ORDER = ['monthly_general', 'monthly_weekday', 'monthly_weekend', 'monthly_student'];
-
-  const monthly = [];
-  const rental = [];
-  for (let i = 1; i < data.length; i++) {
-    const id = String(data[i][0]).trim();
-    if (!id) continue;
-    const name = data[i][1];
-    const type = String(data[i][2]).trim();
-    if (type === 'rental_office') {
-      rental.push({ memberId: id, name: name });
-    } else if (MONTHLY_ORDER.indexOf(type) !== -1) {
-      monthly.push({
-        memberId:  id,
-        name:      name,
-        type:      type,
-        typeLabel: (MEMBER_TYPES[type] && MEMBER_TYPES[type].label) || type,
-      });
-    }
-  }
-
-  // 月額会員：種別順 → 同種別内は会員番号順
-  monthly.sort(function(a, b) {
-    const oa = MONTHLY_ORDER.indexOf(a.type);
-    const ob = MONTHLY_ORDER.indexOf(b.type);
-    if (oa !== ob) return oa - ob;
-    return (parseInt(a.memberId, 10) || 0) - (parseInt(b.memberId, 10) || 0);
-  });
-  // レンタルオフィス入居者：会員番号順
-  rental.sort(function(a, b) {
-    return (parseInt(a.memberId, 10) || 0) - (parseInt(b.memberId, 10) || 0);
-  });
-
-  return { success: true, monthly: monthly, rental: rental };
 }
 
 // ============================================================
@@ -988,40 +938,4 @@ function setupFormTrigger() {
     .create();
 
   console.log('トリガーを登録しました。フォーム送信時に自動同期されます。');
-}
-
-function debugStripeForMember() {
-  const STRIPE_SECRET_KEY = PropertiesService.getScriptProperties().getProperty('STRIPE_SECRET_KEY');
-  const email = 'sugicoko315@icloud.com';
-  
-  // 顧客検索
-  const res = UrlFetchApp.fetch(
-    `https://api.stripe.com/v1/customers?email=${encodeURIComponent(email)}&limit=1`,
-    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
-  );
-  const customers = JSON.parse(res.getContentText()).data;
-  if (!customers.length) { console.log('顧客が見つかりません'); return; }
-  
-  const customerId = customers[0].id;
-  console.log('顧客ID:', customerId);
-  
-  // サブスクリプション取得
-  const subRes = UrlFetchApp.fetch(
-    `https://api.stripe.com/v1/subscriptions?customer=${customerId}&status=active&limit=5`,
-    { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
-  );
-  const subs = JSON.parse(subRes.getContentText()).data;
-  console.log('サブスク数:', subs.length);
-  
-  subs.forEach(sub => {
-    sub.items.data.forEach(item => {
-      const productId = item.price.product;
-      const productRes = UrlFetchApp.fetch(
-        `https://api.stripe.com/v1/products/${productId}`,
-        { headers: { Authorization: 'Basic ' + Utilities.base64Encode(STRIPE_SECRET_KEY + ':') } }
-      );
-      const product = JSON.parse(productRes.getContentText());
-      console.log('商品名:', product.name, '/ ステータス:', sub.status);
-    });
-  });
 }

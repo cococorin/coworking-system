@@ -39,6 +39,42 @@ const STRIPE_UNMANAGED_PLANS = ['レンタルオフィス入居者'];
 const ACTIVE_STATUSES = ['active', 'trialing'];
 
 // ============================================================
+// レンタルオフィス入居者の会員番号を収集する（真実の情報源 = 会員マスタ）
+//   判定：会員マスタ E列（備考）= 「レンタルオフィス入居者」
+//         または C列（会員種別コード）= 'rental_office'
+//   これらは手動課金で Stripe 管理外のため、毎日の同期では
+//   照合も書き換えも一切行わない（回答シートI列の値には依存しない）。
+//   会員番号（回答シートL列 ↔ 会員マスタA列）で照合する。
+// ============================================================
+// 備考（E列）がレンタルオフィス入居者かどうかを表記揺れに強く判定する。
+// 末尾スペース・括弧違い等を許容するため「レンタルオフィス」を含むかで見る。
+function isRentalOfficeNote(note) {
+  return String(note || '').indexOf('レンタルオフィス') !== -1;
+}
+
+function getRentalOfficeMemberIds() {
+  const ids = new Set();
+  try {
+    const masterSS = SpreadsheetApp.openById('1knYE9NMyYkVAWQqqNb5DsUoUHLAF4RFVQ3k6MOzTgCU');
+    const masterSheet = masterSS.getSheetByName('会員マスタ');
+    if (!masterSheet) return ids;
+    const m = masterSheet.getDataRange().getValues();
+    for (let i = 1; i < m.length; i++) {
+      const note = String(m[i][4]).trim(); // E列：備考（登録時プラン）
+      const code = String(m[i][2]).trim(); // C列：会員種別コード
+      // 表記揺れ・末尾スペースに強くするため部分一致で判定する
+      if (isRentalOfficeNote(note) || code === RENTAL_OFFICE_CODE) {
+        const id = parseInt(String(m[i][0]).trim(), 10);
+        if (!isNaN(id)) ids.add(id);
+      }
+    }
+  } catch (e) {
+    console.log('getRentalOfficeMemberIds エラー: ' + e.message);
+  }
+  return ids;
+}
+
+// ============================================================
 // メイン：Stripeサブスク情報を取得して会員マスタを更新
 // ★毎日1回、時間トリガーで実行してください
 // ============================================================
@@ -70,6 +106,10 @@ function _runStripeSync(options) {
   const COL_EMAIL_FORMAL = 14; // O列：正式メールアドレス
   const COL_EMAIL_APPLY  = 1;  // B列：申込時メールアドレス（Oが空の場合の代替）
   const COL_PLAN         = 8;  // I列：プラン
+  const COL_MEMBER_ID    = 11; // L列：会員番号
+
+  // レンタルオフィス入居者（会員マスタ基準）。同期対象から完全に除外する。
+  const rentalOfficeIds = getRentalOfficeMemberIds();
 
   // メールアドレス → 行インデックスのマップ（高速検索用）
   const emailToRow = {};
@@ -107,9 +147,19 @@ function _runStripeSync(options) {
 
     const currentPlan = String(data[rowIdx][COL_PLAN]).trim();
 
+    // レンタルオフィス入居者（会員マスタ基準）は同期対象外。回答シートI列が
+    // 何であろうと照合・書き換えを行わない。
+    const memberId = parseInt(String(data[rowIdx][COL_MEMBER_ID]).trim(), 10);
+    if (!isNaN(memberId) && rentalOfficeIds.has(memberId)) {
+      console.log(`保護(レンタルオフィス/会員マスタ基準): ${data[rowIdx][2]} (#${memberId}) — 同期対象外`);
+      preserved++;
+      continue;
+    }
+
     // Stripe管理外プラン（レンタルオフィス等）はStripeの状態に関わらず維持。
     // これらはStripeに有効サブスクが無いため、放置するとドロップインに上書きされてしまう。
-    if (STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) {
+    // 表記揺れ・末尾スペースに強くするため部分一致でも判定する。
+    if (isRentalOfficeNote(currentPlan) || STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) {
       console.log(`保護(Stripe管理外): ${data[rowIdx][2]} (${emailKey}) — 既存値「${currentPlan}」を維持`);
       preserved++;
       continue;
@@ -133,8 +183,11 @@ function _runStripeSync(options) {
   for (const [emailKey, rowIdx] of Object.entries(emailToRow)) {
     if (processedEmails.has(emailKey)) continue;
     const currentPlan = String(data[rowIdx][COL_PLAN]).trim();
-    // Stripe管理外プラン（レンタルオフィス等）は維持
-    if (STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) continue;
+    // レンタルオフィス入居者（会員マスタ基準）は書き換え対象外
+    const moMemberId = parseInt(String(data[rowIdx][COL_MEMBER_ID]).trim(), 10);
+    if (!isNaN(moMemberId) && rentalOfficeIds.has(moMemberId)) continue;
+    // Stripe管理外プラン（レンタルオフィス等）は維持（部分一致でも保護）
+    if (isRentalOfficeNote(currentPlan) || STRIPE_UNMANAGED_PLANS.indexOf(currentPlan) !== -1) continue;
     if (currentPlan !== DROPIN_LABEL && currentPlan.startsWith('月額')) {
       if (!dryRun) sheet.getRange(rowIdx + 1, COL_PLAN + 1).setValue(DROPIN_LABEL);
       console.log(`${dryRun ? '[DRY-RUN] ' : ''}解約扱いに変更: ${data[rowIdx][2]} (${emailKey}) "${currentPlan}" → "${DROPIN_LABEL}"`);
@@ -234,27 +287,65 @@ function syncMasterFromAnswerSheet() {
     const planLabel = String(srcData[i][COL_PLAN]).trim();
     if (!planLabel) continue;
 
-    const planCode = PLAN_MAP[planLabel];
+    // 回答シートI列を「最新の真実」として扱う。
+    // 「レンタルオフィス」を含む表記は表記揺れ・末尾スペースを許容して rental_office に。
+    const planCode = isRentalOfficeNote(planLabel) ? RENTAL_OFFICE_CODE : PLAN_MAP[planLabel];
     if (!planCode) {
       // I列が想定外の値の場合は会員マスタを上書きしない（既存値を維持）
       console.log('会員マスタ更新スキップ: I列="' + planLabel + '" は未知の値 (memberId=' + memberId + ')');
       skipped++;
       continue;
     }
+    // 備考（E列）へ書き戻す正規ラベル（レンタルは表記を正規化）
+    const canonicalNote = isRentalOfficeNote(planLabel) ? RENTAL_OFFICE_LABEL : planLabel;
 
     if (isNaN(memberId)) continue;
     const rowIdx = idToRow[memberId];
     if (rowIdx === undefined) continue;
 
+    // C列（会員種別コード＝課金が参照）を同期
     const currentCode = String(destData[rowIdx][2]).trim();
     if (currentCode !== planCode) {
       destSheet.getRange(rowIdx + 1, 3).setValue(planCode);
-      console.log(`会員マスタ更新: ${destData[rowIdx][1]} (#${memberId}) ${currentCode} → ${planCode}`);
+      console.log(`会員マスタ更新(C列): ${destData[rowIdx][1]} (#${memberId}) ${currentCode} → ${planCode}`);
+      updated++;
+    }
+
+    // E列（備考）を回答シートI列の最新値に同期（複製ズレ＝紛らわしさの解消）
+    const currentNote = String(destData[rowIdx][4]).trim();
+    if (currentNote !== canonicalNote) {
+      destSheet.getRange(rowIdx + 1, 5).setValue(canonicalNote);
+      console.log(`会員マスタ更新(E列備考): ${destData[rowIdx][1]} (#${memberId}) "${currentNote}" → "${canonicalNote}"`);
       updated++;
     }
   }
 
+  // 念のため会員マスタ全体を走査し、回答シートに行が無いレンタルオフィス会員
+  // （手動エントリ等）も含めて C列を rental_office に収束させる
+  healRentalOfficeMaster(destSheet);
+
   console.log(`会員マスタ同期完了: 更新 ${updated}件 / スキップ ${skipped}件`);
+}
+
+// ============================================================
+// 会員マスタ自己修復：備考（E列）がレンタルオフィスの全行について、
+// C列が rental_office でなければ強制的に直す。
+// 回答シートに行が無い会員（手動追加分）も確実に保護できる。
+// 直前の書き込みを反映するため、最新値を読み直して判定する。
+// ============================================================
+function healRentalOfficeMaster(sheet) {
+  const data = sheet.getDataRange().getValues();
+  let healed = 0;
+  for (let i = 1; i < data.length; i++) {
+    const note = String(data[i][4]).trim(); // E列
+    const code = String(data[i][2]).trim(); // C列
+    if (isRentalOfficeNote(note) && code !== RENTAL_OFFICE_CODE) {
+      sheet.getRange(i + 1, 3).setValue(RENTAL_OFFICE_CODE);
+      console.log(`自己修復(会員マスタ走査): ${data[i][1]} (#${data[i][0]}) C列 "${code}" → "${RENTAL_OFFICE_CODE}"`);
+      healed++;
+    }
+  }
+  if (healed) console.log(`会員マスタ自己修復: ${healed}件`);
 }
 
 // ============================================================
@@ -303,7 +394,7 @@ function _repairRentalOffice(options) {
 
   for (let i = 1; i < mData.length; i++) {
     const note = String(mData[i][4]).trim(); // E列：備考（登録時プラン）
-    if (note !== RENTAL_OFFICE_LABEL) continue;
+    if (!isRentalOfficeNote(note)) continue;
     scanned++;
 
     const memberId = parseInt(String(mData[i][0]).trim(), 10);
