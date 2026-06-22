@@ -252,28 +252,48 @@ async function loadCurrentMembers() {
     const mEl = document.getElementById('monthly-list');
     mEl.innerHTML = monthly.length === 0
       ? '<div class="empty">月額会員はいません</div>'
-      : monthly.map(u => `
-        <div class="user-item">
-          <div class="user-avatar">${u.name ? u.name[0] : '?'}</div>
-          <div style="flex:1;">
-            <div class="user-name">${u.name}</div>
-            <div class="user-meta">${u.typeLabel} · #${u.memberId}</div>
-          </div>
-        </div>
-      `).join('');
+      : `
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>お名前</th>
+              <th>会員区分</th>
+              <th>会員番号</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${monthly.map(u => `
+              <tr>
+                <td class="log-name">${u.name}</td>
+                <td class="log-meta">${u.typeLabel}</td>
+                <td class="log-meta">#${u.memberId}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
 
     const rEl = document.getElementById('rental-list');
     rEl.innerHTML = rental.length === 0
       ? '<div class="empty">レンタルオフィス入居者はいません</div>'
-      : rental.map(u => `
-        <div class="user-item">
-          <div class="user-avatar">${u.name ? u.name[0] : '?'}</div>
-          <div style="flex:1;">
-            <div class="user-name">${u.name}</div>
-            <div class="user-meta">#${u.memberId}</div>
-          </div>
-        </div>
-      `).join('');
+      : `
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>お名前</th>
+              <th>会員番号</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rental.map(u => `
+              <tr>
+                <td class="log-name">${u.name}</td>
+                <td class="log-meta">#${u.memberId}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
   } catch(e) {
     console.error('loadCurrentMembers error:', e);
   }
