@@ -74,17 +74,27 @@
   #log-list { overflow-x: auto; }
 
   /* 累積集計パネル */
-  .log-stats { width: 300px; flex-shrink: 0; background: #f8fbfa; border: 1px solid #e3efe9; border-radius: 12px; padding: 0.85rem 1rem; font-size: 12px; }
+  .log-stats { flex: 1 1 420px; background: #f8fbfa; border: 1px solid #e3efe9; border-radius: 12px; padding: 0.85rem 1rem; font-size: 12px; }
   .log-stats h4 { font-size: 11px; color: #0F6E56; font-weight: 700; margin: 0 0 6px; letter-spacing: 0.02em; }
-  .log-stats .ls-section + .ls-section { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e3efe9; }
-  .log-stats .ls-row { display: flex; justify-content: space-between; padding: 2px 0; color: #444; }
-  .log-stats .ls-row .v { font-weight: 700; color: #1a1a1a; }
-  .log-stats .ls-sub { padding-left: 10px; color: #999; font-size: 11px; }
+  .log-stats .ls-grid { display: flex; gap: 1.25rem; align-items: flex-start; }
+  .log-stats .ls-col { flex: 1; min-width: 0; }
+  .log-stats .ls-col + .ls-col { padding-left: 1.25rem; border-left: 1px solid #e3efe9; }
+  .log-stats .ls-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; color: #444; }
+  .log-stats .ls-row .v { font-weight: 700; color: #1a1a1a; white-space: nowrap; }
+  .log-stats .ls-row .pay { font-size: 11px; color: #1D9E75; font-weight: 600; white-space: nowrap; }
+  .log-stats .ls-sub { color: #888; font-size: 11px; }
+  .log-stats .ls-total { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #d4e6dd; }
 
   /* ラジオセル（利用者区分・支払い方法） */
   .radio-cell { white-space: nowrap; }
   .radio-cell label { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: #555; cursor: pointer; margin-right: 6px; }
   .radio-cell input { margin: 0; cursor: pointer; }
+
+  /* 確定ボタン */
+  .confirm-btn { font-size: 11px; color: #1D9E75; background: #E1F5EE; border: 1px solid #b9e3d3; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-weight: 700; white-space: nowrap; }
+  .confirm-btn:hover { background: #cdeee2; }
+  .confirm-btn:disabled { opacity: 0.6; cursor: default; }
+  .confirm-btn.confirmed { color: #fff; background: #1D9E75; border-color: #1D9E75; }
 </style>
 </head>
 <body>
@@ -332,64 +342,96 @@ function isMonthlyLog(l) {
   return (Number(l.fee) || 0) === 0;
 }
 
-// 利用者区分の実効値（管理者が未設定なら種別から推定：学生プランのみ学生、他は一般）
+// 利用者区分の実効値（未設定は「一般」をプリセット）
 function effUserKind(l) {
-  if (l.userKind === '一般' || l.userKind === '学生') return l.userKind;
-  return String(l.type || '') === 'monthly_student' ? '学生' : '一般';
+  return l.userKind === '学生' ? '学生' : '一般';
 }
 
-// 支払い方法の実効値（未設定なら現金）
+// 支払い方法の実効値（未設定は「現金」。ドロップインのみ意味を持つ）
 function effPayment(l) {
   return l.payment === '現金以外' ? '現金以外' : '現金';
 }
 
-// ラジオ変更：ローカル即時反映＋集計更新→スプレッドシートに保存
-async function setLogAttr(rowIndex, field, value) {
+// ラジオ変更：ローカル即時反映＋集計更新（保存は「確定」ボタンで行う）
+function selectLogAttr(rowIndex, field, value) {
   const log = displayedLogs.find(l => l.rowIndex === rowIndex);
   if (log) { log[field] = value; renderLogStats(); }
+  // ラジオを変えたら未確定状態に戻す
+  const btn = document.getElementById('confirm-' + rowIndex);
+  if (btn) { btn.textContent = '確定'; btn.classList.remove('confirmed'); btn.disabled = false; }
+}
+
+// 「確定」ボタン：利用者区分・支払い方法をスプレッドシートへ保存
+async function confirmLogRow(rowIndex, btn) {
+  const log = displayedLogs.find(l => l.rowIndex === rowIndex);
+  if (!log) return;
+  const userKind = effUserKind(log);
+  const payment  = isMonthlyLog(log) ? '' : effPayment(log);  // 月額会員は支払いなし
+  btn.disabled = true;
+  btn.textContent = '保存中…';
   try {
-    const data = await fetchGAS({ action: 'updateLogAttr', rowIndex: rowIndex, field: field, value: value });
-    if (!data.success) console.error('updateLogAttr failed:', data.error);
+    const data = await fetchGAS({ action: 'confirmLog', rowIndex: rowIndex, userKind: userKind, payment: payment });
+    if (data.success) {
+      log.userKind = userKind;
+      log.payment  = payment;
+      btn.textContent = '確定済';
+      btn.classList.add('confirmed');
+      btn.disabled = false;
+    } else {
+      alert('保存に失敗しました: ' + (data.error || '不明なエラー'));
+      btn.textContent = '確定';
+      btn.disabled = false;
+    }
   } catch (e) {
-    console.error('setLogAttr error:', e);
+    alert('通信エラー: ' + e.message);
+    btn.textContent = '確定';
+    btn.disabled = false;
   }
 }
 
-// 累積集計パネルを描画
+// 累積集計パネルを描画（左：利用人数の内訳／右：支払い方法別の金額 を横並び）
 function renderLogStats() {
   const el = document.getElementById('log-stats');
   if (!displayedLogs.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
 
-  let mG = 0, mS = 0, dG = 0, dS = 0;        // 利用人数の内訳
-  let cash = 0, ncTotal = 0, ncG = 0, ncS = 0; // 支払い方法別の金額
+  let mG = 0, mS = 0, dG = 0, dS = 0;                 // 利用人数の内訳
+  let dGcash = 0, dGnon = 0, dScash = 0, dSnon = 0;   // ドロップインの支払い内訳（区分×支払い方法）
   displayedLogs.forEach(l => {
     const monthly = isMonthlyLog(l);
     const kind = effUserKind(l);
     const fee = Number(l.fee) || 0;
-    if (monthly) { kind === '学生' ? mS++ : mG++; }
-    else         { kind === '学生' ? dS++ : dG++; }
-    if (fee > 0) {
-      if (effPayment(l) === '現金') { cash += fee; }
-      else { ncTotal += fee; kind === '学生' ? (ncS += fee) : (ncG += fee); }
+    if (monthly) {
+      kind === '学生' ? mS++ : mG++;
+    } else {
+      kind === '学生' ? dS++ : dG++;
+      if (fee > 0) {
+        const cash = effPayment(l) === '現金';
+        if (kind === '学生') { cash ? (dScash += fee) : (dSnon += fee); }
+        else                 { cash ? (dGcash += fee) : (dGnon += fee); }
+      }
     }
   });
+  const cashTotal = dGcash + dScash;
+  const nonTotal  = dGnon + dSnon;
 
   const y = n => '¥' + n.toLocaleString();
   el.style.display = 'block';
   el.innerHTML = `
-    <div class="ls-section">
-      <h4>利用人数の内訳</h4>
-      <div class="ls-row"><span>月額・一般</span><span class="v">${mG}名</span></div>
-      <div class="ls-row"><span>月額・学生</span><span class="v">${mS}名</span></div>
-      <div class="ls-row"><span>ドロップイン・一般</span><span class="v">${dG}名</span></div>
-      <div class="ls-row"><span>ドロップイン・学生</span><span class="v">${dS}名</span></div>
-    </div>
-    <div class="ls-section">
-      <h4>支払い方法別の金額</h4>
-      <div class="ls-row"><span>現金</span><span class="v">${y(cash)}</span></div>
-      <div class="ls-row"><span>現金以外</span><span class="v">${y(ncTotal)}</span></div>
-      <div class="ls-row ls-sub"><span>└ 一般</span><span>${y(ncG)}</span></div>
-      <div class="ls-row ls-sub"><span>└ 学生</span><span>${y(ncS)}</span></div>
+    <div class="ls-grid">
+      <div class="ls-col">
+        <h4>利用人数の内訳</h4>
+        <div class="ls-row"><span>月額・一般</span><span class="v">${mG}名</span></div>
+        <div class="ls-row"><span>月額・学生</span><span class="v">${mS}名</span></div>
+        <div class="ls-row"><span>ドロップイン・一般</span><span class="v">${dG}名</span></div>
+        <div class="ls-row"><span>ドロップイン・学生</span><span class="v">${dS}名</span></div>
+      </div>
+      <div class="ls-col">
+        <h4>支払い方法別の金額</h4>
+        <div class="ls-row"><span>ドロップイン・一般 ${dG}名</span><span class="pay">現金 ${y(dGcash)} ／ 現金以外 ${y(dGnon)}</span></div>
+        <div class="ls-row"><span>ドロップイン・学生 ${dS}名</span><span class="pay">現金 ${y(dScash)} ／ 現金以外 ${y(dSnon)}</span></div>
+        <div class="ls-row ls-total"><span>現金 合計</span><span class="v">${y(cashTotal)}</span></div>
+        <div class="ls-row"><span>現金以外 合計</span><span class="v">${y(nonTotal)}</span></div>
+      </div>
     </div>`;
 }
 
@@ -442,12 +484,15 @@ async function loadLog() {
               <th>利用者</th>
               <th style="text-align:right;">料金</th>
               <th>支払い</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             ${logs.map(l => {
               const effKind = effUserKind(l);
               const effPay  = effPayment(l);
+              const monthly = isMonthlyLog(l);
+              const confirmed = !!(l.userKind);  // 保存済みなら確定済み表示
               return `
               <tr>
                 <td><span class="log-badge ${l.status === '利用中' ? 'badge-in' : 'badge-out'}">${l.status === '利用中' ? '入館' : '退館'}</span></td>
@@ -458,16 +503,21 @@ async function loadLog() {
                 <td class="log-meta">${l.checkoutTime || '-'}</td>
                 <td class="log-meta">${l.duration || '-'}</td>
                 <td class="radio-cell">
-                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '一般' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'userKind', '一般')">一般</label>
-                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '学生' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'userKind', '学生')">学生</label>
+                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '一般' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '一般')">一般</label>
+                  <label><input type="radio" name="kind_${l.rowIndex}" ${effKind === '学生' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'userKind', '学生')">学生</label>
                 </td>
                 <td style="text-align:right;white-space:nowrap;">
                   ${l.fee ? `<span class="log-fee">¥${Number(l.fee).toLocaleString()}</span>` : '<span class="log-meta">-</span>'}
                   <button class="fee-edit-btn" onclick="editFee(${l.rowIndex}, ${Number(l.fee) || 0}, this)">修正</button>
                 </td>
                 <td class="radio-cell">
-                  <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'payment', '現金')">現金</label>
-                  <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金以外' ? 'checked' : ''} onclick="setLogAttr(${l.rowIndex}, 'payment', '現金以外')">現金以外</label>
+                  ${monthly
+                    ? '<span class="log-meta">-</span>'
+                    : `<label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金')">現金</label>
+                       <label><input type="radio" name="pay_${l.rowIndex}" ${effPay === '現金以外' ? 'checked' : ''} onclick="selectLogAttr(${l.rowIndex}, 'payment', '現金以外')">現金以外</label>`}
+                </td>
+                <td>
+                  <button class="confirm-btn ${confirmed ? 'confirmed' : ''}" id="confirm-${l.rowIndex}" onclick="confirmLogRow(${l.rowIndex}, this)">${confirmed ? '確定済' : '確定'}</button>
                 </td>
               </tr>
             `;

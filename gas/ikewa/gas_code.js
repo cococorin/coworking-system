@@ -86,6 +86,9 @@ function handleRequest(e) {
       case 'updateLogAttr':
         result = updateLogAttr(params);
         break;
+      case 'confirmLog':
+        result = confirmLog(params);
+        break;
       case 'getStats':
         result = getStats();
         break;
@@ -501,6 +504,29 @@ function updateLogAttr(params) {
 
   sheet.getRange(rowIndex, col).setValue(value);
   return { success: true, rowIndex: rowIndex, field: field, value: value };
+}
+
+// ============================================================
+// ヘルパー：ログ行の利用者区分・支払い方法をまとめて確定保存
+//   管理者画面の「確定」ボタンで呼ばれる。
+//   userKind: '一般' / '学生'、payment: '現金' / '現金以外'（月額会員は空欄）
+// ============================================================
+function confirmLog(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) {
+    return { success: false, error: '対象行が不正です' };
+  }
+  const sheet = getOrCreateSheet(CONFIG.SHEET_NAME_LOG);
+  if (rowIndex > sheet.getLastRow()) {
+    return { success: false, error: '対象行が見つかりません' };
+  }
+  ensureLogAttrHeaders(sheet);
+
+  const userKind = String(params.userKind || '');
+  const payment  = String(params.payment  || '');
+  sheet.getRange(rowIndex, 11).setValue(userKind);  // K列：利用者区分
+  sheet.getRange(rowIndex, 12).setValue(payment);   // L列：支払い方法
+  return { success: true, rowIndex: rowIndex, userKind: userKind, payment: payment };
 }
 
 // 既存ログシートに利用者区分・支払い方法のヘッダーが無ければ追加する
