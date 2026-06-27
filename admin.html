@@ -216,6 +216,15 @@
   <div id="notice-list"></div>
 </div>
 
+<!-- 対応ログ -->
+<div class="section">
+  <div class="section-title">
+    対応ログ（直近5件）
+    <a id="response-sheet-link" href="#" target="_blank" rel="noopener" style="font-size:12px;color:#1D9E75;font-weight:600;text-decoration:none;display:none;">スプレッドシートで全て見る →</a>
+  </div>
+  <div id="response-log"></div>
+</div>
+
 <!-- メール設定 -->
 <div class="section">
   <div class="section-title">初回利用メール設定</div>
@@ -250,7 +259,7 @@ async function fetchGAS(params) {
 }
 
 async function loadAll() {
-  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog(), loadNotices()]);
+  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog(), loadNotices(), loadResponses()]);
 }
 
 async function loadStats() {
@@ -653,6 +662,7 @@ async function loadNotices() {
             <th>会員番号</th>
             <th>お名前</th>
             <th>メッセージ</th>
+            <th>対応記録</th>
             <th>連絡状況</th>
             <th></th>
           </tr>
@@ -663,6 +673,12 @@ async function loadNotices() {
               <td class="log-meta">#${escHtml(n.memberId)}</td>
               <td class="log-name">${escHtml(n.name)}</td>
               <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
+              <td>
+                <div style="display:flex;gap:4px;align-items:center;">
+                  <input type="text" class="notice-input" style="width:150px;padding:0.35rem 0.5rem;font-size:12px;" placeholder="誰がどう対応したか" onkeydown="if(event.key==='Enter')this.nextElementSibling.click();">
+                  <button class="confirm-btn" onclick="addResponse('${escHtml(n.memberId)}', this.previousElementSibling)">記録</button>
+                </div>
+              </td>
               <td>
                 <span class="notice-toggle ${n.done ? 'done' : 'pending'}" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
                   ${n.done ? '連絡済み' : '未連絡'}
@@ -717,6 +733,66 @@ async function deleteNotice(rowIndex, memberId) {
     else alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
   } catch (e) {
     alert('通信エラー: ' + e.message);
+  }
+}
+
+// ===== 対応ログ =====
+async function addResponse(memberId, inputEl) {
+  const content = inputEl.value.trim();
+  if (!content) { alert('対応内容を入力してください'); return; }
+  try {
+    const data = await fetchGAS({ action: 'addResponse', memberId: memberId, content: content });
+    if (data.success) {
+      inputEl.value = '';
+      loadResponses();
+    } else {
+      alert('記録に失敗しました: ' + (data.error || '不明なエラー'));
+    }
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function loadResponses() {
+  try {
+    const data = await fetchGAS({ action: 'getResponses' });
+    const responses = data.responses || [];
+    const el = document.getElementById('response-log');
+
+    const linkEl = document.getElementById('response-sheet-link');
+    if (data.sheetUrl) {
+      linkEl.href = data.sheetUrl;
+      linkEl.style.display = 'inline';
+      linkEl.textContent = `スプレッドシートで全て見る（全${data.total || 0}件）→`;
+    }
+
+    if (responses.length === 0) {
+      el.innerHTML = '<div class="empty">対応ログはまだありません</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>会員番号</th>
+            <th>お名前</th>
+            <th>対応内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${responses.map(r => `
+            <tr>
+              <td class="log-meta" style="white-space:nowrap;">${escHtml(r.time)}</td>
+              <td class="log-meta">${r.memberId ? '#' + escHtml(r.memberId) : '-'}</td>
+              <td class="log-name">${escHtml(r.name) || '-'}</td>
+              <td class="log-meta" style="white-space:normal;">${escHtml(r.content)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    console.error('loadResponses error:', e);
   }
 }
 

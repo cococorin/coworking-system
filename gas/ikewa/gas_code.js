@@ -8,6 +8,7 @@ const CONFIG = {
   SHEET_NAME_MEMBERS: '会員マスタ',
   SHEET_NAME_STATS: '統計',
   SHEET_NAME_NOTICES: '個別連絡',
+  SHEET_NAME_RESPONSES: '対応ログ',
   ADMIN_EMAIL: 'info@handanotane.com',
   FROM_EMAIL:   'info@handanotane.com',
   SPACE_NAME: 'cococorin',
@@ -122,6 +123,12 @@ function handleRequest(e) {
         break;
       case 'deleteNotice':
         result = deleteNotice(params);
+        break;
+      case 'addResponse':
+        result = addResponse(params);
+        break;
+      case 'getResponses':
+        result = getResponses();
         break;
       case 'unsubscribe':
         result = unsubscribe(params.memberId);
@@ -951,6 +958,53 @@ function deleteNotice(params) {
   if (rowIndex > sheet.getLastRow()) return { success: false, error: '対象が見つかりません' };
   sheet.deleteRow(rowIndex);
   return { success: true };
+}
+
+// ============================================================
+// 対応ログ（誰がどう対応したかの履歴。追記式で残す）
+//   シート「対応ログ」 列構成：A 日時 / B 会員番号 / C 氏名 / D 対応内容
+// ============================================================
+function getResponseSheet() {
+  const ss = getDestSpreadsheet();
+  let sheet = ss.getSheetByName(CONFIG.SHEET_NAME_RESPONSES);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEET_NAME_RESPONSES);
+    sheet.appendRow(['日時', '会員番号', '氏名', '対応内容']);
+    sheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#E1F5EE');
+  }
+  return sheet;
+}
+
+// 対応内容を1件追記
+function addResponse(params) {
+  const content = String(params.content || '').trim();
+  if (!content) return { success: false, error: '対応内容を入力してください' };
+  const memberId = String(params.memberId || '').trim();
+  const member = memberId ? findMember(memberId) : null;
+  const name = member ? member.name : '';
+  const now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+  getResponseSheet().appendRow([now, memberId, name, content]);
+  return { success: true };
+}
+
+// 対応ログの直近5件＋スプレッドシートへのリンクを返す
+function getResponses() {
+  const sheet = getResponseSheet();
+  const data = sheet.getDataRange().getValues();
+  const all = [];
+  for (let i = 1; i < data.length; i++) {
+    if (!data[i][3] && !data[i][0]) continue;
+    const t = data[i][0];
+    all.push({
+      time:     (t instanceof Date) ? Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') : String(t || ''),
+      memberId: String(data[i][1] || ''),
+      name:     String(data[i][2] || ''),
+      content:  String(data[i][3] || ''),
+    });
+  }
+  const recent = all.slice(-5).reverse(); // 新しい順に直近5件
+  const sheetUrl = getDestSpreadsheet().getUrl() + '#gid=' + sheet.getSheetId();
+  return { success: true, responses: recent, total: all.length, sheetUrl: sheetUrl };
 }
 
 // ============================================================
