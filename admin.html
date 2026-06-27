@@ -95,6 +95,14 @@
   .confirm-btn:hover { background: #cdeee2; }
   .confirm-btn:disabled { opacity: 0.6; cursor: default; }
   .confirm-btn.confirmed { color: #fff; background: #1D9E75; border-color: #1D9E75; }
+
+  /* 個別連絡 */
+  .notice-input { padding: 0.5rem 0.7rem; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 14px; font-family: inherit; }
+  .notice-toggle { display: inline-block; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; cursor: pointer; user-select: none; white-space: nowrap; border: 1.5px solid transparent; }
+  .notice-toggle.pending { background: #FAEEDA; color: #854F0B; border-color: #f0dcb8; }
+  .notice-toggle.done { background: #E1F5EE; color: #0F6E56; border-color: #b9e3d3; }
+  .notice-del { font-size: 11px; color: #c0392b; background: #fdeeec; border: 1px solid #f3cdc7; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-weight: 600; white-space: nowrap; }
+  .notice-del:hover { background: #f9ddd8; }
 </style>
 </head>
 <body>
@@ -186,6 +194,28 @@
   </table>
 </div>
 
+<!-- 個別連絡（入館時ポップアップ） -->
+<div class="section">
+  <div class="section-title">
+    個別連絡（入館時ポップアップ）
+    <button class="refresh-btn" onclick="loadNotices()">更新</button>
+  </div>
+  <div style="font-size:13px;color:#888;line-height:1.7;margin-bottom:1rem;padding:0.75rem 1rem;background:#f8f8f6;border-radius:8px;border-left:3px solid #00a3af;">
+    指定した会員番号の方が入館手続きをすると、受付画面にメッセージのポップアップが表示されます。<br>
+    連絡が済んだら「連絡状況」を「連絡済み」に切り替えてください（切り替えるとポップアップは表示されなくなります）。
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin-bottom:0.5rem;">
+    <input type="number" id="notice-member-id" class="notice-input" placeholder="会員番号" style="width:120px;">
+    <textarea id="notice-message" class="notice-input" rows="2" style="flex:1;min-width:240px;resize:vertical;"></textarea>
+    <button onclick="saveNotice()" style="background:#1D9E75;color:#fff;border:none;padding:0.55rem 1.3rem;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">登録</button>
+  </div>
+  <div style="font-size:12px;color:#aaa;margin-bottom:1rem;">
+    メッセージ未入力で登録すると既定文が使われます。同じ会員番号で再登録すると上書きされ、未連絡に戻ります。
+    <span id="notice-save-msg" style="color:#1D9E75;font-weight:600;display:none;margin-left:8px;">保存しました</span>
+  </div>
+  <div id="notice-list"></div>
+</div>
+
 <!-- メール設定 -->
 <div class="section">
   <div class="section-title">初回利用メール設定</div>
@@ -220,7 +250,7 @@ async function fetchGAS(params) {
 }
 
 async function loadAll() {
-  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog()]);
+  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog(), loadNotices()]);
 }
 
 async function loadStats() {
@@ -598,10 +628,103 @@ async function saveFee(rowIndex, btn) {
   }
 }
 
+// ===== 個別連絡（入館時ポップアップ） =====
+const NOTICE_DEFAULT_MESSAGE = 'コココリンからお客様に個別のご連絡がありますので、スタッフにお声がけください';
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+async function loadNotices() {
+  try {
+    const data = await fetchGAS({ action: 'getNotices' });
+    const notices = data.notices || [];
+    const el = document.getElementById('notice-list');
+    if (notices.length === 0) {
+      el.innerHTML = '<div class="empty">登録された個別連絡はありません</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th>会員番号</th>
+            <th>お名前</th>
+            <th>メッセージ</th>
+            <th>連絡状況</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${notices.map(n => `
+            <tr>
+              <td class="log-meta">#${escHtml(n.memberId)}</td>
+              <td class="log-name">${escHtml(n.name)}</td>
+              <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
+              <td>
+                <span class="notice-toggle ${n.done ? 'done' : 'pending'}" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
+                  ${n.done ? '連絡済み' : '未連絡'}
+                </span>
+              </td>
+              <td><button class="notice-del" onclick="deleteNotice(${n.rowIndex}, '${escHtml(n.memberId)}')">削除</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    console.error('loadNotices error:', e);
+  }
+}
+
+async function saveNotice() {
+  const memberId = document.getElementById('notice-member-id').value.trim();
+  const message  = document.getElementById('notice-message').value.trim();
+  if (!memberId) { alert('会員番号を入力してください'); return; }
+  try {
+    const data = await fetchGAS({ action: 'saveNotice', memberId: memberId, message: message });
+    if (data.success) {
+      document.getElementById('notice-member-id').value = '';
+      document.getElementById('notice-message').value = NOTICE_DEFAULT_MESSAGE;
+      const msg = document.getElementById('notice-save-msg');
+      msg.style.display = 'inline';
+      setTimeout(() => msg.style.display = 'none', 3000);
+      loadNotices();
+    } else {
+      alert('保存に失敗しました: ' + (data.error || '不明なエラー'));
+    }
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function toggleNotice(rowIndex, done) {
+  try {
+    const data = await fetchGAS({ action: 'setNoticeDone', rowIndex: rowIndex, done: done });
+    if (data.success) loadNotices();
+    else alert('更新に失敗しました: ' + (data.error || '不明なエラー'));
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function deleteNotice(rowIndex, memberId) {
+  if (!confirm(`会員番号 #${memberId} の個別連絡を削除しますか？`)) return;
+  try {
+    const data = await fetchGAS({ action: 'deleteNotice', rowIndex: rowIndex });
+    if (data.success) loadNotices();
+    else alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
+  }
+}
+
 // 今日の日付をデフォルトセット
 const today = new Date().toISOString().split('T')[0];
 document.getElementById('log-date-from').value = today;
 document.getElementById('log-date-to').value = today;
+document.getElementById('notice-message').value = NOTICE_DEFAULT_MESSAGE;
 loadAll();
 loadMailSettings();
 setInterval(loadAll, 60000);

@@ -83,12 +83,30 @@
 
   /* ======== 管理者リンク ======== */
   .admin-link { font-size: 12px; color: #bbb; text-align: center; margin-top: 1.5rem; cursor: pointer; text-decoration: underline; }
+
+  /* ======== 個別連絡ポップアップ ======== */
+  .notice-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 200; padding: 1.5rem; }
+  .notice-modal.show { display: flex; }
+  .notice-modal-card { background: #fff; border-radius: 20px; padding: 2rem 1.75rem; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,0.25); }
+  .notice-modal-icon { font-size: 44px; margin-bottom: 1rem; line-height: 1; }
+  .notice-modal-text { font-size: 18px; font-weight: 600; color: #1a1a1a; line-height: 1.7; margin-bottom: 1.5rem; white-space: pre-wrap; }
+  .notice-modal-btn { width: 100%; background: #00a3af; border: none; border-radius: 14px; padding: 1rem; font-size: 17px; font-weight: 700; color: #fff; cursor: pointer; transition: transform 0.1s; }
+  .notice-modal-btn:active { transform: scale(0.98); }
 </style>
 </head>
 <body>
 
 <!-- ローディング -->
 <div class="loading" id="loading"><div class="spinner"></div></div>
+
+<!-- 個別連絡ポップアップ -->
+<div class="notice-modal" id="notice-modal">
+  <div class="notice-modal-card">
+    <div class="notice-modal-icon">📢</div>
+    <div class="notice-modal-text" id="notice-modal-text"></div>
+    <button class="notice-modal-btn" onclick="closeNoticeModal()">確認しました</button>
+  </div>
+</div>
 
 <div id="app">
 
@@ -439,6 +457,16 @@ function showCheckinResult(data) {
   }
 
   showScreen('screen-checkin');
+
+  // 個別連絡（入館時ポップアップ）
+  if (data.notice && data.notice.message) {
+    document.getElementById('notice-modal-text').textContent = data.notice.message;
+    document.getElementById('notice-modal').classList.add('show');
+  }
+}
+
+function closeNoticeModal() {
+  document.getElementById('notice-modal').classList.remove('show');
 }
 
 function showCheckoutResult(data) {
@@ -463,6 +491,7 @@ function backHome() {
   input = '';
   updateDisplay();
   document.getElementById('error-msg').textContent = '';
+  closeNoticeModal();
   showScreen('screen-home');
   startAutoRedirect();
 }

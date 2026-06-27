@@ -7,12 +7,16 @@ const CONFIG = {
   SHEET_NAME_LOG: '入退館ログ',
   SHEET_NAME_MEMBERS: '会員マスタ',
   SHEET_NAME_STATS: '統計',
+  SHEET_NAME_NOTICES: '個別連絡',
   ADMIN_EMAIL: 'info@handanotane.com',
   FROM_EMAIL:   'info@handanotane.com',
   SPACE_NAME: 'cococorin',
   DROPIN_HOURLY: 400,
   DROPIN_DAILY_MAX: 1000,
 };
+
+// 入館時ポップアップの既定メッセージ
+const DEFAULT_NOTICE_MESSAGE = 'コココリンからお客様に個別のご連絡がありますので、スタッフにお声がけください';
 
 // 会員種別と月額料金
 const MEMBER_TYPES = {
@@ -107,6 +111,18 @@ function handleRequest(e) {
       case 'saveMailSettings':
         result = saveMailSettings(params);
         break;
+      case 'getNotices':
+        result = getNotices();
+        break;
+      case 'saveNotice':
+        result = saveNotice(params);
+        break;
+      case 'setNoticeDone':
+        result = setNoticeDone(params);
+        break;
+      case 'deleteNotice':
+        result = deleteNotice(params);
+        break;
       case 'unsubscribe':
         result = unsubscribe(params.memberId);
         break;
@@ -164,6 +180,9 @@ function doCheckIn(memberId) {
     '利用中',
   ]);
 
+  // 個別連絡（入館時ポップアップ）の確認
+  const notice = getActiveNotice(memberId);
+
   return {
     success: true,
     action: 'checkin',
@@ -175,6 +194,7 @@ function doCheckIn(memberId) {
     isMonthly: dayCheck.dropinFallback ? false : (MEMBER_TYPES[member.type]?.isMonthly || false),
     dropinFallback: dayCheck.dropinFallback || false,
     fallbackMessage: dayCheck.message || '',
+    notice: notice ? { message: notice.message } : null,
   };
 }
 
@@ -824,6 +844,113 @@ function saveMailSettings(params) {
     }
   }
   return { success: true, message: '保存しました' };
+}
+
+// ============================================================
+// 個別連絡（入館時ポップアップ）
+//   シート「個別連絡」 列構成：
+//   A 会員番号 / B メッセージ / C 連絡済み(1=済) / D 登録日時 / E 連絡日時
+// ============================================================
+function getNoticeSheet() {
+  const ss = getDestSpreadsheet();
+  let sheet = ss.getSheetByName(CONFIG.SHEET_NAME_NOTICES);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEET_NAME_NOTICES);
+    sheet.appendRow(['会員番号', 'メッセージ', '連絡済み', '登録日時', '連絡日時']);
+    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#E1F5EE');
+  }
+  return sheet;
+}
+
+// 指定会員の「未連絡」の個別連絡を取得（入館時ポップアップ用）。なければ null
+function getActiveNotice(memberId) {
+  const sheet = getNoticeSheet();
+  const data = sheet.getDataRange().getValues();
+  const inputNum = parseInt(memberId, 10);
+  for (let i = 1; i < data.length; i++) {
+    const rowNum = parseInt(String(data[i][0]).trim(), 10);
+    const done = String(data[i][2]).trim() === '1';
+    if (!isNaN(rowNum) && rowNum === inputNum && !done) {
+      return { rowIndex: i + 1, memberId: String(data[i][0]).trim(), message: String(data[i][1] || '') };
+    }
+  }
+  return null;
+}
+
+// 個別連絡の一覧取得（管理者画面用）
+function getNotices() {
+  const sheet = getNoticeSheet();
+  const data = sheet.getDataRange().getValues();
+  const notices = [];
+  for (let i = 1; i < data.length; i++) {
+    const id = String(data[i][0]).trim();
+    if (!id) continue;
+    const member = findMember(id);
+    notices.push({
+      rowIndex:      i + 1,
+      memberId:      id,
+      name:          member ? member.name : '(会員マスタに未登録)',
+      message:       String(data[i][1] || ''),
+      done:          String(data[i][2]).trim() === '1',
+      registeredAt:  data[i][3] ? String(data[i][3]) : '',
+      contactedAt:   data[i][4] ? String(data[i][4]) : '',
+    });
+  }
+  // 未連絡を上に、その中で会員番号順
+  notices.sort(function(a, b) {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return (parseInt(a.memberId, 10) || 0) - (parseInt(b.memberId, 10) || 0);
+  });
+  return { success: true, notices: notices };
+}
+
+// 個別連絡の登録・更新（会員番号で1件にまとめる）。登録/更新すると未連絡状態になる
+function saveNotice(params) {
+  const memberId = String(params.memberId || '').trim();
+  if (!memberId || isNaN(parseInt(memberId, 10))) {
+    return { success: false, error: '会員番号を正しく入力してください' };
+  }
+  const message = String(params.message || '').trim() || DEFAULT_NOTICE_MESSAGE;
+  const sheet = getNoticeSheet();
+  const data = sheet.getDataRange().getValues();
+  const now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+  const inputNum = parseInt(memberId, 10);
+
+  for (let i = 1; i < data.length; i++) {
+    if (parseInt(String(data[i][0]).trim(), 10) === inputNum) {
+      // 既存を更新（未連絡に戻す）
+      sheet.getRange(i + 1, 2).setValue(message);
+      sheet.getRange(i + 1, 3).setValue('');   // 連絡済みフラグをクリア
+      sheet.getRange(i + 1, 4).setValue(now);  // 登録日時を更新
+      sheet.getRange(i + 1, 5).setValue('');   // 連絡日時をクリア
+      return { success: true, memberId: memberId, updated: true };
+    }
+  }
+  // 新規追加
+  sheet.appendRow([memberId, message, '', now, '']);
+  return { success: true, memberId: memberId, updated: false };
+}
+
+// 連絡状況のトグル（連絡済み ⇔ 未連絡）
+function setNoticeDone(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) return { success: false, error: '対象が不正です' };
+  const sheet = getNoticeSheet();
+  if (rowIndex > sheet.getLastRow()) return { success: false, error: '対象が見つかりません' };
+  const done = String(params.done) === '1';
+  sheet.getRange(rowIndex, 3).setValue(done ? '1' : '');
+  sheet.getRange(rowIndex, 5).setValue(done ? Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') : '');
+  return { success: true, rowIndex: rowIndex, done: done };
+}
+
+// 個別連絡の削除
+function deleteNotice(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) return { success: false, error: '対象が不正です' };
+  const sheet = getNoticeSheet();
+  if (rowIndex > sheet.getLastRow()) return { success: false, error: '対象が見つかりません' };
+  sheet.deleteRow(rowIndex);
+  return { success: true };
 }
 
 // ============================================================
