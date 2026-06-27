@@ -693,8 +693,10 @@ function renderNoticeList() {
             <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
             <td>
               <div style="display:flex;gap:4px;align-items:center;">
-                <input type="text" class="notice-input" value="${escHtml(n.response)}" style="width:150px;padding:0.35rem 0.5rem;font-size:12px;" placeholder="誰がどう対応したか" onkeydown="if(event.key==='Enter')this.nextElementSibling.click();">
-                <button class="confirm-btn" onclick="recordResponse(${n.rowIndex}, this.previousElementSibling)">記録</button>
+                <input type="text" class="notice-input" value="${escHtml(n.response)}" style="width:150px;padding:0.35rem 0.5rem;font-size:12px;" placeholder="誰がどう対応したか"
+                  oninput="const b=this.nextElementSibling; b.textContent='記録'; b.classList.remove('confirmed');"
+                  onkeydown="if(event.key==='Enter')this.nextElementSibling.click();">
+                <button class="confirm-btn ${n.response && n.response.trim() ? 'confirmed' : ''}" onclick="recordResponse(${n.rowIndex}, this.previousElementSibling)">${n.response && n.response.trim() ? '記録済み' : '記録'}</button>
               </div>
             </td>
             <td>
