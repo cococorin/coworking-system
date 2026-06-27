@@ -8,7 +8,6 @@ const CONFIG = {
   SHEET_NAME_MEMBERS: '会員マスタ',
   SHEET_NAME_STATS: '統計',
   SHEET_NAME_NOTICES: '個別連絡',
-  SHEET_NAME_RESPONSES: '対応ログ',
   ADMIN_EMAIL: 'info@handanotane.com',
   FROM_EMAIL:   'info@handanotane.com',
   SPACE_NAME: 'cococorin',
@@ -124,11 +123,8 @@ function handleRequest(e) {
       case 'deleteNotice':
         result = deleteNotice(params);
         break;
-      case 'addResponse':
-        result = addResponse(params);
-        break;
-      case 'getResponses':
-        result = getResponses();
+      case 'recordResponse':
+        result = recordResponse(params);
         break;
       case 'unsubscribe':
         result = unsubscribe(params.memberId);
@@ -856,20 +852,29 @@ function saveMailSettings(params) {
 // ============================================================
 // 個別連絡（入館時ポップアップ）
 //   シート「個別連絡」 列構成：
-//   A 会員番号 / B メッセージ / C 連絡済み(1=済) / D 登録日時 / E 連絡日時
+//   A 会員番号 / B メッセージ / C 対応完了(1=済) / D 登録日時 / E 完了日時 / F 対応記録
 // ============================================================
 function getNoticeSheet() {
   const ss = getDestSpreadsheet();
   let sheet = ss.getSheetByName(CONFIG.SHEET_NAME_NOTICES);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_NAME_NOTICES);
-    sheet.appendRow(['会員番号', 'メッセージ', '連絡済み', '登録日時', '連絡日時']);
-    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#E1F5EE');
+    sheet.appendRow(['会員番号', 'メッセージ', '対応完了', '登録日時', '完了日時', '対応記録']);
+    sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#E1F5EE');
+  } else if (!String(sheet.getRange(1, 6).getValue()).trim()) {
+    // 既存シートに「対応記録」列が無ければ追加
+    sheet.getRange(1, 6).setValue('対応記録').setFontWeight('bold').setBackground('#E1F5EE');
   }
   return sheet;
 }
 
-// 指定会員の「未連絡」の個別連絡を取得（入館時ポップアップ用）。なければ null
+// 個別連絡シートの日時セルを文字列化
+function formatNoticeTime(val) {
+  if (val instanceof Date) return Utilities.formatDate(val, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+  return String(val || '').trim();
+}
+
+// 指定会員の「未対応」の個別連絡を取得（入館時ポップアップ用）。なければ null
 function getActiveNotice(memberId) {
   const sheet = getNoticeSheet();
   const data = sheet.getDataRange().getValues();
@@ -885,6 +890,7 @@ function getActiveNotice(memberId) {
 }
 
 // 個別連絡の一覧取得（管理者画面用）
+//   能動リストと「個人連絡対応ログ」への振り分けはフロント側で行う
 function getNotices() {
   const sheet = getNoticeSheet();
   const data = sheet.getDataRange().getValues();
@@ -899,11 +905,12 @@ function getNotices() {
       name:          member ? member.name : '(会員マスタに未登録)',
       message:       String(data[i][1] || ''),
       done:          String(data[i][2]).trim() === '1',
-      registeredAt:  data[i][3] ? String(data[i][3]) : '',
-      contactedAt:   data[i][4] ? String(data[i][4]) : '',
+      registeredAt:  formatNoticeTime(data[i][3]),
+      completedAt:   formatNoticeTime(data[i][4]),
+      response:      String(data[i][5] || ''),
     });
   }
-  // 未連絡を上に、その中で会員番号順
+  // 未対応を上に、その中で会員番号順
   notices.sort(function(a, b) {
     if (a.done !== b.done) return a.done ? 1 : -1;
     return (parseInt(a.memberId, 10) || 0) - (parseInt(b.memberId, 10) || 0);
@@ -911,7 +918,7 @@ function getNotices() {
   return { success: true, notices: notices };
 }
 
-// 個別連絡の登録・更新（会員番号で1件にまとめる）。登録/更新すると未連絡状態になる
+// 個別連絡の登録・更新（会員番号で1件にまとめる）。登録/更新すると未対応状態になる
 function saveNotice(params) {
   const memberId = String(params.memberId || '').trim();
   if (!memberId || isNaN(parseInt(memberId, 10))) {
@@ -925,11 +932,12 @@ function saveNotice(params) {
 
   for (let i = 1; i < data.length; i++) {
     if (parseInt(String(data[i][0]).trim(), 10) === inputNum) {
-      // 既存を更新（未連絡に戻す）
+      // 既存を更新（未対応に戻す）
       sheet.getRange(i + 1, 2).setValue(message);
-      sheet.getRange(i + 1, 3).setValue('');   // 連絡済みフラグをクリア
+      sheet.getRange(i + 1, 3).setValue('');   // 対応完了フラグをクリア
       sheet.getRange(i + 1, 4).setValue(now);  // 登録日時を更新
-      sheet.getRange(i + 1, 5).setValue('');   // 連絡日時をクリア
+      sheet.getRange(i + 1, 5).setValue('');   // 完了日時をクリア
+      sheet.getRange(i + 1, 6).setValue('');   // 対応記録をクリア
       return { success: true, memberId: memberId, updated: true };
     }
   }
@@ -938,7 +946,7 @@ function saveNotice(params) {
   return { success: true, memberId: memberId, updated: false };
 }
 
-// 連絡状況のトグル（連絡済み ⇔ 未連絡）
+// 対応状況のトグル（対応完了 ⇔ 未対応）
 function setNoticeDone(params) {
   const rowIndex = parseInt(params.rowIndex, 10);
   if (!rowIndex || rowIndex < 2) return { success: false, error: '対象が不正です' };
@@ -960,51 +968,15 @@ function deleteNotice(params) {
   return { success: true };
 }
 
-// ============================================================
-// 対応ログ（誰がどう対応したかの履歴。追記式で残す）
-//   シート「対応ログ」 列構成：A 日時 / B 会員番号 / C 氏名 / D 対応内容
-// ============================================================
-function getResponseSheet() {
-  const ss = getDestSpreadsheet();
-  let sheet = ss.getSheetByName(CONFIG.SHEET_NAME_RESPONSES);
-  if (!sheet) {
-    sheet = ss.insertSheet(CONFIG.SHEET_NAME_RESPONSES);
-    sheet.appendRow(['日時', '会員番号', '氏名', '対応内容']);
-    sheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#E1F5EE');
-  }
-  return sheet;
-}
-
-// 対応内容を1件追記
-function addResponse(params) {
+// 対応記録（誰がどう対応したか）を個別連絡の行に保存（F列）
+function recordResponse(params) {
+  const rowIndex = parseInt(params.rowIndex, 10);
+  if (!rowIndex || rowIndex < 2) return { success: false, error: '対象が不正です' };
+  const sheet = getNoticeSheet();
+  if (rowIndex > sheet.getLastRow()) return { success: false, error: '対象が見つかりません' };
   const content = String(params.content || '').trim();
-  if (!content) return { success: false, error: '対応内容を入力してください' };
-  const memberId = String(params.memberId || '').trim();
-  const member = memberId ? findMember(memberId) : null;
-  const name = member ? member.name : '';
-  const now = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
-  getResponseSheet().appendRow([now, memberId, name, content]);
+  sheet.getRange(rowIndex, 6).setValue(content);
   return { success: true };
-}
-
-// 対応ログの直近5件＋スプレッドシートへのリンクを返す
-function getResponses() {
-  const sheet = getResponseSheet();
-  const data = sheet.getDataRange().getValues();
-  const all = [];
-  for (let i = 1; i < data.length; i++) {
-    if (!data[i][3] && !data[i][0]) continue;
-    const t = data[i][0];
-    all.push({
-      time:     (t instanceof Date) ? Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm') : String(t || ''),
-      memberId: String(data[i][1] || ''),
-      name:     String(data[i][2] || ''),
-      content:  String(data[i][3] || ''),
-    });
-  }
-  const recent = all.slice(-5).reverse(); // 新しい順に直近5件
-  const sheetUrl = getDestSpreadsheet().getUrl() + '#gid=' + sheet.getSheetId();
-  return { success: true, responses: recent, total: all.length, sheetUrl: sheetUrl };
 }
 
 // ============================================================

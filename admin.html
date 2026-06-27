@@ -202,7 +202,8 @@
   </div>
   <div style="font-size:13px;color:#888;line-height:1.7;margin-bottom:1rem;padding:0.75rem 1rem;background:#f8f8f6;border-radius:8px;border-left:3px solid #00a3af;">
     指定した会員番号の方が入館手続きをすると、受付画面にメッセージのポップアップが表示されます。<br>
-    連絡が済んだら「連絡状況」を「連絡済み」に切り替えてください（切り替えるとポップアップは表示されなくなります）。
+    対応したら「対応記録」に内容を記録し、「対応状況」を「対応完了」に切り替えてください（対応完了にするとポップアップは表示されなくなります）。<br>
+    対応記録があり対応完了になった項目は、下の「個人連絡対応ログ」へ移動します。
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin-bottom:0.5rem;">
     <input type="number" id="notice-member-id" class="notice-input" placeholder="会員番号" style="width:120px;">
@@ -210,17 +211,22 @@
     <button onclick="saveNotice()" style="background:#1D9E75;color:#fff;border:none;padding:0.55rem 1.3rem;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">登録</button>
   </div>
   <div style="font-size:12px;color:#aaa;margin-bottom:1rem;">
-    メッセージ未入力で登録すると既定文が使われます。同じ会員番号で再登録すると上書きされ、未連絡に戻ります。
+    メッセージ未入力で登録すると既定文が使われます。同じ会員番号で再登録すると上書きされ、未対応に戻ります。
     <span id="notice-save-msg" style="color:#1D9E75;font-weight:600;display:none;margin-left:8px;">保存しました</span>
   </div>
   <div id="notice-list"></div>
 </div>
 
-<!-- 対応ログ -->
+<!-- 個人連絡対応ログ -->
 <div class="section">
-  <div class="section-title">
-    対応ログ（直近5件）
-    <a id="response-sheet-link" href="#" target="_blank" rel="noopener" style="font-size:12px;color:#1D9E75;font-weight:600;text-decoration:none;display:none;">スプレッドシートで全て見る →</a>
+  <div class="section-title">個人連絡対応ログ</div>
+  <div class="filter-row">
+    <span style="font-size:13px;color:#888;">開始</span>
+    <input type="date" id="resp-date-from">
+    <span style="font-size:13px;color:#888;">終了</span>
+    <input type="date" id="resp-date-to">
+    <button onclick="renderResponseLog()">絞り込み</button>
+    <button onclick="clearRespFilter()" style="background:#888;">直近5件</button>
   </div>
   <div id="response-log"></div>
 </div>
@@ -259,7 +265,7 @@ async function fetchGAS(params) {
 }
 
 async function loadAll() {
-  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog(), loadNotices(), loadResponses()]);
+  await Promise.all([loadStats(), loadActiveUsers(), loadCurrentMembers(), loadLog(), loadNotices()]);
 }
 
 async function loadStats() {
@@ -646,52 +652,61 @@ function escHtml(s) {
   ));
 }
 
+let allNotices = [];
+
 async function loadNotices() {
   try {
     const data = await fetchGAS({ action: 'getNotices' });
-    const notices = data.notices || [];
-    const el = document.getElementById('notice-list');
-    if (notices.length === 0) {
-      el.innerHTML = '<div class="empty">登録された個別連絡はありません</div>';
-      return;
-    }
-    el.innerHTML = `
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>会員番号</th>
-            <th>お名前</th>
-            <th>メッセージ</th>
-            <th>対応記録</th>
-            <th>連絡状況</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${notices.map(n => `
-            <tr>
-              <td class="log-meta">#${escHtml(n.memberId)}</td>
-              <td class="log-name">${escHtml(n.name)}</td>
-              <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
-              <td>
-                <div style="display:flex;gap:4px;align-items:center;">
-                  <input type="text" class="notice-input" style="width:150px;padding:0.35rem 0.5rem;font-size:12px;" placeholder="誰がどう対応したか" onkeydown="if(event.key==='Enter')this.nextElementSibling.click();">
-                  <button class="confirm-btn" onclick="addResponse('${escHtml(n.memberId)}', this.previousElementSibling)">記録</button>
-                </div>
-              </td>
-              <td>
-                <span class="notice-toggle ${n.done ? 'done' : 'pending'}" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
-                  ${n.done ? '連絡済み' : '未連絡'}
-                </span>
-              </td>
-              <td><button class="notice-del" onclick="deleteNotice(${n.rowIndex}, '${escHtml(n.memberId)}')">削除</button></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>`;
+    allNotices = data.notices || [];
+    renderNoticeList();
+    renderResponseLog();
   } catch (e) {
     console.error('loadNotices error:', e);
   }
+}
+
+// 能動リスト（未対応、または対応完了でも対応記録が未入力のもの）を描画
+function renderNoticeList() {
+  const el = document.getElementById('notice-list');
+  const active = allNotices.filter(n => !(n.done && n.response && n.response.trim()));
+  if (active.length === 0) {
+    el.innerHTML = '<div class="empty">対応が必要な個別連絡はありません</div>';
+    return;
+  }
+  el.innerHTML = `
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>会員番号</th>
+          <th>お名前</th>
+          <th>メッセージ</th>
+          <th>対応記録</th>
+          <th>対応状況</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${active.map(n => `
+          <tr>
+            <td class="log-meta">#${escHtml(n.memberId)}</td>
+            <td class="log-name">${escHtml(n.name)}</td>
+            <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
+            <td>
+              <div style="display:flex;gap:4px;align-items:center;">
+                <input type="text" class="notice-input" value="${escHtml(n.response)}" style="width:150px;padding:0.35rem 0.5rem;font-size:12px;" placeholder="誰がどう対応したか" onkeydown="if(event.key==='Enter')this.nextElementSibling.click();">
+                <button class="confirm-btn" onclick="recordResponse(${n.rowIndex}, this.previousElementSibling)">記録</button>
+              </div>
+            </td>
+            <td>
+              <span class="notice-toggle ${n.done ? 'done' : 'pending'}" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
+                ${n.done ? '対応完了' : '未対応'}
+              </span>
+            </td>
+            <td><button class="notice-del" onclick="deleteNotice(${n.rowIndex}, '${escHtml(n.memberId)}')">取り消し</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
 }
 
 async function saveNotice() {
@@ -726,74 +741,86 @@ async function toggleNotice(rowIndex, done) {
 }
 
 async function deleteNotice(rowIndex, memberId) {
-  if (!confirm(`会員番号 #${memberId} の個別連絡を削除しますか？`)) return;
+  if (!confirm(`会員番号 #${memberId} の個別連絡を取り消しますか？`)) return;
   try {
     const data = await fetchGAS({ action: 'deleteNotice', rowIndex: rowIndex });
     if (data.success) loadNotices();
-    else alert('削除に失敗しました: ' + (data.error || '不明なエラー'));
+    else alert('取り消しに失敗しました: ' + (data.error || '不明なエラー'));
   } catch (e) {
     alert('通信エラー: ' + e.message);
   }
 }
 
-// ===== 対応ログ =====
-async function addResponse(memberId, inputEl) {
+// ===== 対応記録・個人連絡対応ログ =====
+async function recordResponse(rowIndex, inputEl) {
   const content = inputEl.value.trim();
   if (!content) { alert('対応内容を入力してください'); return; }
   try {
-    const data = await fetchGAS({ action: 'addResponse', memberId: memberId, content: content });
-    if (data.success) {
-      inputEl.value = '';
-      loadResponses();
-    } else {
-      alert('記録に失敗しました: ' + (data.error || '不明なエラー'));
-    }
+    const data = await fetchGAS({ action: 'recordResponse', rowIndex: rowIndex, content: content });
+    if (data.success) loadNotices();
+    else alert('記録に失敗しました: ' + (data.error || '不明なエラー'));
   } catch (e) {
     alert('通信エラー: ' + e.message);
   }
 }
 
-async function loadResponses() {
-  try {
-    const data = await fetchGAS({ action: 'getResponses' });
-    const responses = data.responses || [];
-    const el = document.getElementById('response-log');
+// 個人連絡対応ログ（対応完了かつ対応記録ありの項目）を描画
+function renderResponseLog() {
+  const el = document.getElementById('response-log');
+  const from = (document.getElementById('resp-date-from').value || '').replace(/-/g, '/');
+  const to   = (document.getElementById('resp-date-to').value   || '').replace(/-/g, '/');
 
-    const linkEl = document.getElementById('response-sheet-link');
-    if (data.sheetUrl) {
-      linkEl.href = data.sheetUrl;
-      linkEl.style.display = 'inline';
-      linkEl.textContent = `スプレッドシートで全て見る（全${data.total || 0}件）→`;
-    }
+  let items = allNotices.filter(n => n.done && n.response && n.response.trim());
+  // 完了日時の新しい順
+  items.sort((a, b) => (String(a.completedAt) < String(b.completedAt) ? 1 : -1));
 
-    if (responses.length === 0) {
-      el.innerHTML = '<div class="empty">対応ログはまだありません</div>';
-      return;
-    }
-    el.innerHTML = `
-      <table class="log-table">
-        <thead>
-          <tr>
-            <th>日時</th>
-            <th>会員番号</th>
-            <th>お名前</th>
-            <th>対応内容</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${responses.map(r => `
-            <tr>
-              <td class="log-meta" style="white-space:nowrap;">${escHtml(r.time)}</td>
-              <td class="log-meta">${r.memberId ? '#' + escHtml(r.memberId) : '-'}</td>
-              <td class="log-name">${escHtml(r.name) || '-'}</td>
-              <td class="log-meta" style="white-space:normal;">${escHtml(r.content)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>`;
-  } catch (e) {
-    console.error('loadResponses error:', e);
+  const filtering = from || to;
+  if (filtering) {
+    items = items.filter(n => {
+      const d = String(n.completedAt).substring(0, 10);  // yyyy/MM/dd
+      if (from && d < from) return false;
+      if (to   && d > to)   return false;
+      return true;
+    });
+  } else {
+    items = items.slice(0, 5);  // 既定は直近5件
   }
+
+  if (items.length === 0) {
+    el.innerHTML = `<div class="empty">${filtering ? '該当する対応履歴はありません' : '対応完了の履歴はまだありません'}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>完了日時</th>
+          <th>会員番号</th>
+          <th>お名前</th>
+          <th>メッセージ</th>
+          <th>対応記録</th>
+          <th>対応状況</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(n => `
+          <tr>
+            <td class="log-meta" style="white-space:nowrap;">${escHtml(n.completedAt) || '-'}</td>
+            <td class="log-meta">#${escHtml(n.memberId)}</td>
+            <td class="log-name">${escHtml(n.name)}</td>
+            <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
+            <td class="log-meta" style="white-space:normal;">${escHtml(n.response)}</td>
+            <td><span class="notice-toggle done" onclick="toggleNotice(${n.rowIndex}, 0)" title="クリックで未対応に戻す">対応完了</span></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+function clearRespFilter() {
+  document.getElementById('resp-date-from').value = '';
+  document.getElementById('resp-date-to').value = '';
+  renderResponseLog();
 }
 
 // 今日の日付をデフォルトセット
