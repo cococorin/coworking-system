@@ -103,6 +103,16 @@
   .notice-toggle.done { background: #E1F5EE; color: #0F6E56; border-color: #b9e3d3; }
   .notice-del { font-size: 11px; color: #c0392b; background: #fdeeec; border: 1px solid #f3cdc7; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-weight: 600; white-space: nowrap; }
   .notice-del:hover { background: #f9ddd8; }
+
+  /* スライダー型トグル（対応状況） */
+  .sw { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .sw-track { width: 44px; height: 24px; border-radius: 12px; background: #ccc; position: relative; transition: background 0.2s; flex-shrink: 0; }
+  .sw-track.on { background: #1D9E75; }
+  .sw-knob { width: 20px; height: 20px; border-radius: 50%; background: #fff; position: absolute; top: 2px; left: 2px; transition: left 0.2s; }
+  .sw-track.on .sw-knob { left: 22px; }
+  .sw-label { font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .sw-label.on { color: #1D9E75; }
+  .sw-label.off { color: #854F0B; }
 </style>
 </head>
 <body>
@@ -700,9 +710,10 @@ function renderNoticeList() {
               </div>
             </td>
             <td>
-              <span class="notice-toggle ${n.done ? 'done' : 'pending'}" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
-                ${n.done ? '対応完了' : '未対応'}
-              </span>
+              <div class="sw" onclick="toggleNotice(${n.rowIndex}, ${n.done ? 0 : 1})">
+                <span class="sw-label ${n.done ? 'on' : 'off'}">${n.done ? '対応完了' : '未対応'}</span>
+                <div class="sw-track ${n.done ? 'on' : ''}"><div class="sw-knob"></div></div>
+              </div>
             </td>
             <td><button class="notice-del" onclick="deleteNotice(${n.rowIndex}, '${escHtml(n.memberId)}')">取り消し</button></td>
           </tr>
@@ -812,7 +823,12 @@ function renderResponseLog() {
             <td class="log-name">${escHtml(n.name)}</td>
             <td class="log-meta" style="white-space:normal;">${escHtml(n.message)}</td>
             <td class="log-meta" style="white-space:normal;">${escHtml(n.response)}</td>
-            <td><span class="notice-toggle done" onclick="toggleNotice(${n.rowIndex}, 0)" title="クリックで未対応に戻す">対応完了</span></td>
+            <td>
+              <div class="sw" onclick="toggleNotice(${n.rowIndex}, 0)" title="切り替えで未対応に戻す">
+                <span class="sw-label on">対応完了</span>
+                <div class="sw-track on"><div class="sw-knob"></div></div>
+              </div>
+            </td>
           </tr>
         `).join('')}
       </tbody>
