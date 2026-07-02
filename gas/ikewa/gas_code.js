@@ -1226,21 +1226,38 @@ function syncMembersFromForm(e) {
 
   const destSheet = getOrCreateSheet(CONFIG.SHEET_NAME_MEMBERS);
 
-  // 既存チェック
-  const existingData = destSheet.getDataRange().getValues();
-  for (let i = 1; i < existingData.length; i++) {
-    if (String(existingData[i][0]).trim() === memberId) {
-      console.log('既存会員のためスキップ: ' + memberId);
-      return { success: false, error: '既存会員: ' + memberId };
-    }
+  // ★重複登録防止：トリガーの二重発火・並行実行に備えて排他ロックを取得する。
+  //   「既存チェック → appendRow」を直列化しないと、ほぼ同時に走った2つの実行が
+  //   両方とも「既存なし」と判定して2行追加してしまう（重複登録の根本原因）。
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000); // 先行実行が終わるまで最大30秒待つ
+  } catch (lockErr) {
+    console.log('ロック取得に失敗したため中断: ' + lockErr.message);
+    return { success: false, error: 'ロック取得に失敗しました（重複登録防止）' };
   }
 
-  destSheet.appendRow([memberId, name, planCode, email, planRaw]);
-  // H列に経過日数の数式を自動挿入
-  const newRow = destSheet.getLastRow();
-  destSheet.getRange(newRow, 8).setFormula(`=IF(G${newRow}="","",TODAY()-G${newRow})`);
-  console.log('追加完了: ' + memberId + ' ' + name);
-  return { success: true, memberId: memberId, name: name };
+  try {
+    // 既存チェック（ロック内で最新状態を読み直す）
+    const existingData = destSheet.getDataRange().getValues();
+    for (let i = 1; i < existingData.length; i++) {
+      if (String(existingData[i][0]).trim() === memberId) {
+        console.log('既存会員のためスキップ: ' + memberId);
+        return { success: false, error: '既存会員: ' + memberId };
+      }
+    }
+
+    destSheet.appendRow([memberId, name, planCode, email, planRaw]);
+    // 直前の書き込みを確実に反映させてから最終行を取得する
+    SpreadsheetApp.flush();
+    // H列に経過日数の数式を自動挿入
+    const newRow = destSheet.getLastRow();
+    destSheet.getRange(newRow, 8).setFormula(`=IF(G${newRow}="","",TODAY()-G${newRow})`);
+    console.log('追加完了: ' + memberId + ' ' + name);
+    return { success: true, memberId: memberId, name: name };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ============================================================
@@ -1265,6 +1282,52 @@ function setupFormTrigger() {
     .create();
 
   console.log('トリガーを登録しました。フォーム送信時に自動同期されます。');
+}
+
+// ============================================================
+// 【診断】このプロジェクトに登録済みの全トリガーを一覧表示する
+//   会員登録の重複原因の切り分け用。
+//   syncMembersFromForm のトリガーが2つ以上あれば、それが重複登録の原因。
+//   GASエディタから手動実行 → 実行ログを確認する。
+// ============================================================
+function listAllTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  console.log('登録トリガー総数: ' + triggers.length);
+  const countByHandler = {};
+  triggers.forEach(function (t, idx) {
+    const handler = t.getHandlerFunction();
+    countByHandler[handler] = (countByHandler[handler] || 0) + 1;
+    console.log(
+      '  [' + (idx + 1) + '] handler=' + handler
+      + ' / eventType=' + t.getEventType()
+      + ' / source=' + t.getTriggerSource()
+      + ' / id=' + t.getUniqueId()
+    );
+  });
+  console.log('--- ハンドラ別の個数 ---');
+  Object.keys(countByHandler).forEach(function (h) {
+    const n = countByHandler[h];
+    console.log('  ' + h + ' : ' + n + '個' + (n > 1 ? '  ← 重複の疑い' : ''));
+  });
+  return countByHandler;
+}
+
+// ============================================================
+// 【修復】syncMembersFromForm のフォーム送信トリガーを1個だけに整理する
+//   listAllTriggers() で重複が見つかった場合に実行する。
+//   同名トリガーを全削除 → setupFormTrigger() で1個だけ作り直す。
+// ============================================================
+function fixDuplicateFormTriggers() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'syncMembersFromForm') {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
+  });
+  console.log('syncMembersFromForm のトリガーを ' + removed + '個削除しました。');
+  setupFormTrigger();
+  console.log('→ 1個だけ作り直しました。listAllTriggers() で確認してください。');
 }
 
 function debugStripeForMember() {
